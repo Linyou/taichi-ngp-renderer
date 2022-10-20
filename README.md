@@ -1,4 +1,4 @@
-# taichi-ngp-renderer
+# Taichi NGP Renderer
 
 This is an [Instant-NGP](https://github.com/NVlabs/instant-ngp) renderer implemented using [Taichi](https://github.com/taichi-dev/taichi). It is fun to write this very simple code that allows me to implement even just the rendering part of the NGP, especially when you compare it original repo, which is a hundred lines verse thousands (Instant-NGP and [tiny-cuda-nn](https://github.com/NVlabs/tiny-cuda-nn)).
 
