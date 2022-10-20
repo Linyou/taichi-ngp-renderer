@@ -78,7 +78,7 @@ def grid_pos2hash_index(indicator, pos_grid_local, resolution, map_size):
 class NGP_fw:
     def __init__(self, scale, cascades, grid_size, base_res, log2_T, res, level, exp_step_factor):
         self.res = res
-        self.N_rays = res * res
+        self.N_rays = res[0] * res[1]
         self.grid_size = grid_size
         self.exp_step_factor = exp_step_factor
         self.scale = scale
@@ -95,8 +95,8 @@ class NGP_fw:
         self.rays_d = ti.Vector.field(n=3, dtype=data_type, shape=(self.N_rays))
 
         # use the pre-compute direction and scene pose
-        self.directions = ti.Matrix.field(n=1, m=3, dtype=data_type, shape=(self.N_rays,))
-        self.pose = ti.Matrix.field(n=3, m=4, dtype=data_type, shape=())
+        self.directions = ti.Matrix.field(n=1, m=3, dtype=ti.f32, shape=(self.N_rays,))
+        self.pose = ti.Matrix.field(n=3, m=4, dtype=ti.f32, shape=())
 
         # density_bitfield is used for point sampling
         self.density_bitfield = ti.field(ti.uint8, shape=(cascades*grid_size**3//8))
@@ -162,7 +162,11 @@ class NGP_fw:
         self.rgb = ti.Vector.field(3, dtype=data_type, shape=(self.N_rays,))
 
         # GUI render buffer (data type must be float32)
-        self.render_buffer = ti.Vector.field(3, dtype=ti.f32, shape=(res, res,))
+        self.render_buffer = ti.Vector.field(3, dtype=ti.f32, shape=(res[0], res[1],))
+        # camera parameters
+        self.lookat = np.array([0.0, 0.0, -1.0])
+        self.lookat_change = np.zeros((3,))
+        self.lookup = np.array([0.0, -1.0, 0.0])
 
     def hash_table_init(self):
         print(f'GridEncoding: base_res={self.base_res} b={self.per_level_scales:.5f} F={2} max_params={self.max_params} L={self.level}')
@@ -523,19 +527,17 @@ class NGP_fw:
 
 
     def write_image(self):
-        rgb_np = self.rgb.to_numpy().reshape(self.res, self.res, 3)
-        depth_np = self.depth.to_numpy().reshape(self.res, self.res)
+        rgb_np = self.rgb.to_numpy().reshape(self.res[0], self.res[1], 3)
+        depth_np = self.depth.to_numpy().reshape(self.res[0], self.res[1])
         plt.imsave('taichi_ngp.png', (rgb_np*255).astype(np.uint8))
         plt.imsave('taichi_ngp_depth.png', depth2img(depth_np))
 
-
-    def render_frame(self, frame_id):
-        t = time.time()
+    def render(self, max_samples: int) -> tuple[float, int, int]:
         samples = 0
         self.reset()
         self.ray_intersect()
 
-        while samples < 100:
+        while samples < max_samples:
             N_alive = self.counter[None]
             if N_alive == 0: break
 
@@ -553,32 +555,41 @@ class NGP_fw:
             self.composite_test(N_samples, 1e-4)
             self.re_order(N_alive)
 
+        return samples, N_alive, N_samples
+
+    def render_frame(self, frame_id):
+        t = time.time()
+        samples, N_alive, N_samples = self.render(max_samples=100)
         self.write_image()
 
         print(f"samples: {samples}, N_alive: {N_alive}, N_samples: {N_samples}")
-        print("_log_time", f'Render time: {1000*(time.time()-t):.2f} ms')
+        print(f'Render time: {1000*(time.time()-t):.2f} ms')
 
     @ti.kernel
     def render_to_buffer(self):
         for i, j in self.render_buffer:
-            self.render_buffer[i, j] = self.rgb[(self.res-j)*self.res+i]
+            self.render_buffer[i, j] = self.rgb[(self.res[0]-j)*self.res[1]+i]
+
+    def init_cam(self):
+        self.lookat = self.lookat @ self.pose.to_numpy()[:, :3].T
 
     def render_gui(self):
-        W = H = self.res
+        W, H = self.res
         window = ti.ui.Window('Taichi NGP', (W, H))
         canvas = window.get_canvas()
         gui = window.get_gui()
 
         last_mouse_x = None
         last_mouse_y = None
-        camera_speed = 40
+        rotate_speed = 50
+        movement_speed = 0.03
         max_samples_for_rendering = 100
         render_time = 0
-        frame = 0
-
+        # frame = 0
+        self.init_cam()
         while window.running:
-            samples = 0
-            frame+=1
+            pose = self.pose.to_numpy()
+            # frame+=1
             if not window.is_pressed(ti.ui.RMB):
                 last_mouse_x = None
                 last_mouse_y = None
@@ -589,43 +600,43 @@ class NGP_fw:
                 else:
                     dx = curr_mouse_x - last_mouse_x
                     dy = curr_mouse_y - last_mouse_y
-                    pose = self.pose.to_numpy()
-                    rotvec_x = pose[:, 1] * np.radians(camera_speed * dx)
-                    rotvec_y = pose[:, 0] * np.radians(camera_speed * dy)
+                    rotvec_x = pose[:, 1] * np.radians(rotate_speed * dx)
+                    rotvec_y = pose[:, 0] * np.radians(rotate_speed * dy)
                     pose = R.from_rotvec(rotvec_x).as_matrix() @ R.from_rotvec(rotvec_y).as_matrix() @ pose
-                    self.pose.from_numpy(pose)
                     last_mouse_x, last_mouse_y = curr_mouse_x, curr_mouse_y
+                    correct_dir = 1. if pose[1, 3] > 0.0 else -1.
+                    self.lookat = np.array([0., 0., correct_dir]) @ pose[:, :3].T
+
+            front = (self.lookat - pose[:, 3])
+            front = front / np.linalg.norm(front)
+            up = self.lookup @ pose[:, :3].T
+            left = np.cross(up, front)
+            position_change = np.zeros(3)
+            if window.is_pressed('w'):
+                position_change = front * movement_speed
+            if window.is_pressed('s'):
+                position_change = -front * movement_speed
+            if window.is_pressed('a'):
+                position_change = left * movement_speed
+            if window.is_pressed('d'):
+                position_change = -left * movement_speed
+            if window.is_pressed('e'):
+                position_change = up * movement_speed
+            if window.is_pressed('q'):
+                position_change = -up * movement_speed
+            pose[:, 3] += position_change
+            self.lookat += position_change
+            self.pose.from_numpy(pose)
 
             with gui.sub_window("Optian", 0.05, 0.3, 0.2, 0.1) as w:
                 w.text(f'Render time: {render_time:.2f} ms')
                 max_samples_for_rendering = w.slider_float("max_samples", max_samples_for_rendering, 1, 100)
 
             t = time.time()
-            samples = 0
-            self.reset()
-            self.ray_intersect()
-
-            while samples < max_samples_for_rendering:
-                N_alive = self.counter[None]
-                if N_alive == 0: break
-
-                # the number of samples to add on each ray
-                N_samples = max(min(self.N_rays//N_alive, 64), self.min_samples)
-                samples += N_samples
-                launch_model_total = N_alive * N_samples
-
-                self.raymarching_test_kernel(N_samples)
-                self.rearange_index(launch_model_total)
-                self.dir_encode()
-                self.hash_encode()
-                self.sigma_layer()
-                self.rgb_layer()
-                self.composite_test(N_samples, 1e-4)
-                self.re_order(N_alive)
+            _, _, _ = self.render(max_samples=max_samples_for_rendering)
+            self.render_to_buffer()
 
             render_time = 1000*(time.time()-t)
-
-            self.render_to_buffer()
             canvas.set_image(self.render_buffer)
             window.show()
 
@@ -639,7 +650,7 @@ def main(args):
         grid_size=128, 
         base_res=16, 
         log2_T=19, 
-        res=800, 
+        res=[800, 800], 
         level=16, 
         exp_step_factor=0
     )
