@@ -15,7 +15,7 @@ This repository only implemented the forward part of the **Instant-NGP**, which 
 - Ray marching strategic: `raymarching_test_kernel()`
 - Spherical harmonics encoding for ray direction: `dir_encode()`
 - Hash table encoding for 3d position: `hash_encode()`
-- Fully fuse mlp using shared memory: `sigma_layer()`, `rgb_layer()`
+- FullyFusedMLP using shared memory: `sigma_layer()`, `rgb_layer()`
 - Volume rendering: `composite_test()`
 
 Since this repository only implemented the rendering code, so you have to load trained parameters from a pre-trained scene (This repository provides a lego scene).
@@ -23,7 +23,7 @@ Since this repository only implemented the rendering code, so you have to load t
 However, there are some differences compared to the original:
 
 - Taichi currently missing `frexp()` method, so I have to use a hard-coded scale which is 0.5
-- The fully fuse mlp is not exactly the same as **tiny-cuda-nn**. Instead of having a single kernel, this repo use separated kernel `sigma_layer()` and `rgb_layer()` because the shared memory that **Taichi** currency allow is 48KB as issue [#6385](https://github.com/taichi-dev/taichi/issues/6385) points out.
+- The FullyFusedMLP is not exactly the same as **tiny-cuda-nn**. Instead of having a single kernel, this repo use separated kernel `sigma_layer()` and `rgb_layer()` because the shared memory that **Taichi** currency allow is 48KB as issue [#6385](https://github.com/taichi-dev/taichi/issues/6385) points out.
 
 ## GUI
 
