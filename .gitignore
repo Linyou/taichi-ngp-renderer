@@ -1,4 +1,5 @@
-*.ini # imgui init file
+# imgui init file
+/*.ini 
 /npy_models
 /export
 /*.png
