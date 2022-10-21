@@ -75,6 +75,22 @@ def grid_pos2hash_index(indicator, pos_grid_local, resolution, map_size):
 
     return hash_result % map_size
 
+@ti.func
+def dir_encode_func(dir_, input):
+    dir = dir_/dir_.norm()
+    x = dir[0]; y = dir[1]; z = dir[2]
+    xy= x*y; xz= x*z; yz= y*z; x2= x*x; y2= y*y; z2= z*z
+    
+    input[0] = 0.28209479177387814; input[1] = -0.48860251190291987*y; input[2] = 0.48860251190291987*z
+    input[3] = -0.48860251190291987*x; input[4] = 1.0925484305920792*xy; input[5] = -1.0925484305920792*yz
+    input[6] = 0.94617469575755997*z2 - 0.31539156525251999; input[7] = -1.0925484305920792*xz
+    input[8] = 0.54627421529603959*x2 - 0.54627421529603959*y2; input[9] = 0.59004358992664352*y*(-3.0*x2 + y2)
+    input[10] = 2.8906114426405538*xy*z; input[11] = 0.45704579946446572*y*(1.0 - 5.0*z2)
+    input[12] = 0.3731763325901154*z*(5.0*z2 - 3.0); input[13] = 0.45704579946446572*x*(1.0 - 5.0*z2)
+    input[14] = 1.4453057213202769*z*(x2 - y2); input[15] = 0.59004358992664352*x*(-x2 + 3.0*y2)
+
+    return input
+
 #<----------------- hash table util code ----------------->
 
 @ti.data_oriented
@@ -154,7 +170,7 @@ class NGP_fw:
 
         # intermediate buffers for network
         self.xyzs_embedding = ti.field(data_type, shape=(self.max_samples_shape, 32))
-        self.final_embedding = ti.field(data_type, shape=(self.max_samples_shape, 32))
+        self.final_embedding = ti.field(data_type, shape=(self.max_samples_shape, 16))
         self.out_3 = ti.field(data_type, shape=(self.max_samples_shape, 3))
         self.out_1 = ti.field(data_type, shape=(self.max_samples_shape,))
         self.temp_hit = ti.field(ti.i32, shape=(self.max_samples_shape,))
@@ -345,23 +361,6 @@ class NGP_fw:
         # self.padd_block_composite[None] = ((self.counter[None]+ 128 - 1)// 128) *128
 
     @ti.kernel
-    def dir_encode(self):
-        # spherical_harmonics
-        for sn in ti.ndrange(self.model_launch[None]):
-            dir_ = self.dirs[self.temp_hit[sn]]
-            dir = dir_/dir_.norm()
-            x = dir[0]; y = dir[1]; z = dir[2]
-            xy= x*y; xz= x*z; yz= y*z; x2= x*x; y2= y*y; z2= z*z
-            
-            self.final_embedding[sn, 0] = 0.28209479177387814; self.final_embedding[sn, 1] = -0.48860251190291987*y; self.final_embedding[sn, 2] = 0.48860251190291987*z
-            self.final_embedding[sn, 3] = -0.48860251190291987*x; self.final_embedding[sn, 4] = 1.0925484305920792*xy; self.final_embedding[sn, 5] = -1.0925484305920792*yz
-            self.final_embedding[sn, 6] = 0.94617469575755997*z2 - 0.31539156525251999; self.final_embedding[sn, 7] = -1.0925484305920792*xz
-            self.final_embedding[sn, 8] = 0.54627421529603959*x2 - 0.54627421529603959*y2; self.final_embedding[sn, 9] = 0.59004358992664352*y*(-3.0*x2 + y2)
-            self.final_embedding[sn, 10] = 2.8906114426405538*xy*z; self.final_embedding[sn, 11] = 0.45704579946446572*y*(1.0 - 5.0*z2)
-            self.final_embedding[sn, 12] = 0.3731763325901154*z*(5.0*z2 - 3.0); self.final_embedding[sn, 13] = 0.45704579946446572*x*(1.0 - 5.0*z2)
-            self.final_embedding[sn, 14] = 1.4453057213202769*z*(x2 - y2); self.final_embedding[sn, 15] = 0.59004358992664352*x*(-x2 + 3.0*y2)
-
-    @ti.kernel
     def hash_encode(self):
         # get hash table embedding
         for sn, level in ti.ndrange(self.model_launch[None], 16):
@@ -444,7 +443,7 @@ class NGP_fw:
 
                 self.out_1[self.temp_hit[sn]] = data_type(ti.exp(hid2[0, tid]))
                 for i in ti.static(range(16)):
-                    self.final_embedding[sn, i+16] = hid2[i, tid]
+                    self.final_embedding[sn, i] = hid2[i, tid]
                 
                 ti.simt.block.sync()
 
@@ -452,6 +451,7 @@ class NGP_fw:
     def rgb_layer(self):
         ti.loop_config(block_dim=128)
         for sn in ti.ndrange(self.padd_block_network[None]):
+            ray_id = self.temp_hit[sn]
             tid = sn % 128
             did_launch_num = self.model_launch[None]
             init_val = tf_vec1(0.0)
@@ -466,8 +466,11 @@ class NGP_fw:
 
             if sn < did_launch_num:
                 
-                for i in ti.static(range(32)):
-                    input[i] = self.final_embedding[sn, i]
+                dir_ = self.dirs[ray_id]
+                input = dir_encode_func(dir_, input)
+
+                for i in ti.static(range(16)):
+                    input[16+i] = self.final_embedding[sn, i]
 
                 for i in range(64):
                     hid1[i, tid] = init_val[0]
@@ -572,7 +575,7 @@ class NGP_fw:
 
             self.raymarching_test_kernel(N_samples)
             self.rearange_index(launch_model_total)
-            self.dir_encode()
+            # self.dir_encode()
             self.hash_encode()
             self.sigma_layer()
             self.rgb_layer()
@@ -765,5 +768,4 @@ if __name__ == '__main__':
     parser.add_argument('--gui', action='store_true', default=False)
     parser.add_argument('--print_profile', action='store_true', default=False)
     args = parser.parse_args()
-    PRETRAINED_MODEL_URL
     main(args)
