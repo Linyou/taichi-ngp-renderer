@@ -1,16 +1,18 @@
-import torch
+import os
 import numpy as np
 import argparse
 from matplotlib import pyplot as plt
 from scipy.spatial.transform import Rotation as R
 import time
 import taichi as ti
-from taichi.math import uvec3
+from taichi.math import uvec3, vec3, vec2
+import wget
 import cv2
 def depth2img(depth):
     depth = (depth-depth.min())/(depth.max()-depth.min())
     depth_img = cv2.applyColorMap((depth*255).astype(np.uint8),
                                   cv2.COLORMAP_TURBO)
+
     return depth_img
 
 data_type = ti.f16
@@ -25,6 +27,7 @@ NEAR_DISTANCE = 0.01
 SQRT3 = 1.7320508075688772
 SQRT3_MAX_SAMPLES = SQRT3/1024
 SQRT3_2 = 1.7320508075688772*2
+PRETRAINED_MODEL_URL = 'https://github.com/Linyou/taichi-ngp-renderer/releases/download/v0.1-models/{}.npy'
 
 #<----------------- hash table util code ----------------->
 @ti.func
@@ -181,6 +184,22 @@ class NGP_fw:
             self.hash_map_indicator[i] = 1 if resolution ** 3 <= params_in_level else 0
             offset += params_in_level
 
+    def get_direction(self, camera_angle_x):
+        w, h = int(self.res[1]), int(self.res[0])
+        fx = 0.5*w/np.tan(0.5*camera_angle_x)
+        fy = 0.5*h/np.tan(0.5*camera_angle_x)
+        cx, cy = 0.5*w, 0.5*h
+
+        x, y = np.meshgrid(
+            np.arange(w, dtype=np.float32)+ 0.5,
+            np.arange(h, dtype=np.float32)+ 0.5,
+            indexing='xy'
+        )
+
+        directions = np.stack([(x-cx)/fx, (y-cy)/fy, np.ones_like(x)], -1)
+
+        return directions.reshape(-1, 3)
+
     def load_model(self, model_path):
         print('Loading model from {}'.format(model_path))
         model = np.load(model_path, allow_pickle=True).item()
@@ -192,7 +211,12 @@ class NGP_fw:
         self.density_bitfield.from_numpy(model['model.density_bitfield'])
 
         self.pose.from_numpy(model['poses'][20])
-        self.directions.from_numpy(model['directions'][:, None, :])
+        if self.res[0] != 800 or self.res[1] != 800:
+            directions = self.get_direction(model['camera_angle_x'])[:, None, :]
+        else:
+            directions = model['directions'][:, None, :]
+
+        self.directions.from_numpy(directions)
 
     @staticmethod
     def taichi_init(kernel_profiler):
@@ -566,14 +590,39 @@ class NGP_fw:
         print(f'Render time: {1000*(time.time()-t):.2f} ms')
 
     @ti.kernel
-    def render_to_buffer(self):
+    def rgb_to_render_buffer(self):
         for i, j in self.render_buffer:
             self.render_buffer[i, j] = self.rgb[(self.res[0]-j)*self.res[1]+i]
+
+    @ti.kernel
+    def depth_max(self) -> vec2:
+        max_v = ti.f32(self.depth[0])
+        min_v = ti.f32(self.depth[0])
+        for i in ti.ndrange(self.N_rays):
+            ti.atomic_max(max_v, self.depth[i])
+            ti.atomic_min(min_v, self.depth[i])
+        return vec2(max_v, min_v)
+
+    @ti.kernel
+    def depth_to_render_buffer(self, max_min: vec2):
+        for i, j in self.render_buffer:
+            max_v = max_min[0]
+            min_v = max_min[1]
+            pixel = (vec3(self.depth[(self.res[0]-j)*self.res[1]+i])-min_v)/(max_v-min_v)
+            self.render_buffer[i, j] = pixel
 
     def init_cam(self):
         self.lookat = self.lookat @ self.pose.to_numpy()[:, :3].T
 
     def render_gui(self):
+
+        video_manager = None
+
+        # check if the export file exists for snapshot and video
+        export_dir = './export/'
+        if not os.path.exists(export_dir):
+            os.makedir(export_dir)
+
         W, H = self.res
         window = ti.ui.Window('Taichi NGP', (W, H))
         canvas = window.get_canvas()
@@ -585,7 +634,9 @@ class NGP_fw:
         movement_speed = 0.03
         max_samples_for_rendering = 100
         render_time = 0
-        # frame = 0
+        show_rgb = True
+        recording = False
+        frame = 0
         self.init_cam()
         while window.running:
             pose = self.pose.to_numpy()
@@ -628,33 +679,72 @@ class NGP_fw:
             self.lookat += position_change
             self.pose.from_numpy(pose)
 
-            with gui.sub_window("Optian", 0.05, 0.3, 0.2, 0.1) as w:
+            with gui.sub_window("Optian", 0.05, 0.05, 0.4, 0.2) as w:
                 w.text(f'Render time: {render_time:.2f} ms')
                 max_samples_for_rendering = w.slider_float("max_samples", max_samples_for_rendering, 1, 100)
+                if gui.button('show_depth'):
+                    if show_rgb:
+                        show_rgb = False
+                    else:
+                        show_rgb = True
+                if gui.button("snapshot"):
+                    ti.tools.imwrite(self.render_buffer.to_numpy(), export_dir+'snap_shot.png')
+                    print("save snapshot in export folder") 
+                if gui.button('recording'):
+                    frame = 0
+                    if not recording:
+                        video_manager = ti.tools.VideoManager(output_dir=export_dir, framerate=24, automatic_build=False)
+                        recording = True
+                    else:
+                        recording = False
+                        video_manager.make_video(gif=True, mp4=True)
+                        print("save video in export folder") 
+
+                if recording and video_manager:
+                    w.text(f'recording frames: {frame}')
+                    frame += 1
+                    pixels_img = self.render_buffer.to_numpy()
+                    video_manager.write_frame(pixels_img)
+
 
             t = time.time()
             _, _, _ = self.render(max_samples=max_samples_for_rendering)
-            self.render_to_buffer()
+            if show_rgb:
+                self.rgb_to_render_buffer()
+            else:
+                self.depth_to_render_buffer(self.depth_max())
 
             render_time = 1000*(time.time()-t)
             canvas.set_image(self.render_buffer)
             window.show()
 
 
-
 def main(args):
     NGP_fw.taichi_init(args.print_profile)
+    res = args.res
+    scale = 0.5
     ngp = NGP_fw(
-        scale=args.scale, 
-        cascades=max(1+int(np.ceil(np.log2(2*args.scale))), 1),   
+        scale=scale, 
+        cascades=max(1+int(np.ceil(np.log2(2*scale))), 1),   
         grid_size=128, 
         base_res=16, 
         log2_T=19, 
-        res=[800, 800], 
+        res=[res, res], 
         level=16, 
         exp_step_factor=0
     )
-    ngp.load_model(args.ckpt_path)
+    if args.ckpt_path:
+        ngp.load_model(args.ckpt_path)
+    else:
+        model_dir = './npy_models/'
+        if not os.path.exists(model_dir):
+            os.mkdir(model_dir)
+        npy_file = os.path.join(model_dir, args.scene+'.npy')
+        if not os.path.exists(npy_file):
+            url = PRETRAINED_MODEL_URL.format(args.scene)
+            wget.download(url, out=npy_file)
+        ngp.load_model(npy_file)
+
     ngp.hash_table_init()
 
     if not args.gui:
@@ -668,10 +758,12 @@ def main(args):
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--scale', type=float, default=0.5)
-    parser.add_argument('--ckpt_path', type=str, default='./lego.npy')
+    parser.add_argument('--res', type=int, default=800)
+    parser.add_argument('--scene', type=str, default='lego',
+                        choices=['ship', 'mic', 'materials', 'lego', 'hotdog', 'ficus', 'drums', 'chair'],)
+    parser.add_argument('--ckpt_path', type=str, default=None)
     parser.add_argument('--gui', action='store_true', default=False)
     parser.add_argument('--print_profile', action='store_true', default=False)
     args = parser.parse_args()
-
+    PRETRAINED_MODEL_URL
     main(args)
