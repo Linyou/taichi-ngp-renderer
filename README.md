@@ -2,7 +2,7 @@
 
 [![License](https://img.shields.io/badge/license-Apache-green.svg)](LICENSE)
 
-This is an [Instant-NGP](https://github.com/NVlabs/instant-ngp) renderer implemented using [Taichi](https://github.com/taichi-dev/taichi), which is written entirely in Python. **No CUDA!** This repository only implemented the rendering part of the NGP but is more simple and has a lesser amount of code compared to the original (Instant-NGP and [tiny-cuda-nn](https://github.com/NVlabs/tiny-cuda-nn)).
+This is an [Instant-NGP](https://github.com/NVlabs/instant-ngp) renderer implemented using [Taichi](https://github.com/taichi-dev/taichi), written entirely in Python. **No CUDA!** This repository only implemented the rendering part of the NGP but is more simple and has a lesser amount of code compared to the original (Instant-NGP and [tiny-cuda-nn](https://github.com/NVlabs/tiny-cuda-nn)).
 
 <!-- It is fun to write this code that implements even just the rendering part of the NGP, especially when you compare it original repo, which is a hundred lines verse thousands (Instant-NGP and [tiny-cuda-nn](https://github.com/NVlabs/tiny-cuda-nn)). -->
 
