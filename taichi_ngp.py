@@ -8,6 +8,9 @@ import taichi as ti
 from taichi.math import uvec3, vec3, vec2
 import wget
 import cv2
+
+from typing import Tuple
+
 def depth2img(depth):
     depth = (depth-depth.min())/(depth.max()-depth.min())
     depth_img = cv2.applyColorMap((depth*255).astype(np.uint8),
@@ -559,7 +562,7 @@ class NGP_fw:
         plt.imsave('taichi_ngp.png', (rgb_np*255).astype(np.uint8))
         plt.imsave('taichi_ngp_depth.png', depth2img(depth_np))
 
-    def render(self, max_samples: int) -> tuple[float, int, int]:
+    def render(self, max_samples: int) -> Tuple[float, int, int]:
         samples = 0
         self.reset()
         self.ray_intersect()
@@ -736,8 +739,8 @@ def main(args):
         level=16, 
         exp_step_factor=0
     )
-    if args.ckpt_path:
-        ngp.load_model(args.ckpt_path)
+    if args.model_path:
+        ngp.load_model(args.model_path)
     else:
         model_dir = './npy_models/'
         if not os.path.exists(model_dir):
