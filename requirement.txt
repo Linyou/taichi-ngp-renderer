@@ -1,0 +1,6 @@
+wget
+numpy
+scipy
+argparse
+opencv-python
+matplotlib

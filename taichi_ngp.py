@@ -764,7 +764,7 @@ if __name__ == '__main__':
     parser.add_argument('--res', type=int, default=800)
     parser.add_argument('--scene', type=str, default='lego',
                         choices=['ship', 'mic', 'materials', 'lego', 'hotdog', 'ficus', 'drums', 'chair'],)
-    parser.add_argument('--ckpt_path', type=str, default=None)
+    parser.add_argument('--model_path', type=str, default=None)
     parser.add_argument('--gui', action='store_true', default=False)
     parser.add_argument('--print_profile', action='store_true', default=False)
     args = parser.parse_args()
