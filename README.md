@@ -2,6 +2,8 @@
 
 [![License](https://img.shields.io/badge/license-Apache-green.svg)](LICENSE)
 
+##### Update 2022-10-23: Support depth of field (DoF)
+
 This is an [Instant-NGP](https://github.com/NVlabs/instant-ngp) renderer implemented using [Taichi](https://github.com/taichi-dev/taichi), written entirely in Python. **No CUDA!** This repository only implemented the rendering part of the NGP but is more simple and has a lesser amount of code compared to the original (Instant-NGP and [tiny-cuda-nn](https://github.com/NVlabs/tiny-cuda-nn)).
 
 <!-- It is fun to write this code that implements even just the rendering part of the NGP, especially when you compare it original repo, which is a hundred lines verse thousands (Instant-NGP and [tiny-cuda-nn](https://github.com/NVlabs/tiny-cuda-nn)). -->
@@ -57,15 +59,22 @@ However, there are some differences compared to the original:
 
 ## GUI
 
-This code supports real-time rendering GUI interactions with less than 1GB VRAM:
+This code supports real-time rendering GUI interactions with less than 1GB VRAM. Here are the options that the GUI offers:
 
-- Control the camera with the mouse and keyboard
-- Changing the number of samples for each ray while rendering
-- Rendering with different resolution
-- Support video recording and export video and snapshot (Please install [ffmpeg](https://docs.taichi-lang.org/docs/export_results#install-ffmpeg-on-windows))
-- Up to 23 fps on a 3090 GPU at 800 $\times$ 800 resolution
+- **Camera:**
+  - keyboard and mouse control
+  - DoF
+- **Rendering:**
+  - different resolution
+  - the number of samples for each ray
+  - transparency threshold (Stop ray marching)
+  - show depth
+  - black and white background
+- **Export:**
+  - Snapshot
+  - Video recording (Required [ffmpeg](https://docs.taichi-lang.org/docs/export_results#install-ffmpeg-on-windows))
 
-> In order to get 23 fps speed without damaging the visual quality, the  `T_threshold` and `max_samples` is set to 0.1 and 50, respectively.
+> the GUI is running up to 23 fps on a 3090 GPU at 800 $\times$ 800 resolution. In order to get 23 fps speed without damaging the visual quality, the  `T_threshold` and `max_samples` is set to 0.1 and 50, respectively.
 
 <!-- `T_threshold`: Stop rendering when transparent vaule is below this threshold.
 `max_samples`: Maximum samples for each ray. -->
