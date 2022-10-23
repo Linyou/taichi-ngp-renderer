@@ -23,6 +23,7 @@ tf_vec3 = ti.types.vector(3, dtype=data_type)
 tf_vec32 = ti.types.vector(32, dtype=data_type)
 tf_vec1 = ti.types.vector(1, dtype=data_type)
 tf_vec2 = ti.types.vector(2, dtype=data_type)
+tf_mat1x3 = ti.types.matrix(1, 3, dtype=data_type)
 
 MAX_SAMPLES = 1024
 NEAR_DISTANCE = 0.01
@@ -82,6 +83,17 @@ def grid_pos2hash_index(indicator, pos_grid_local, resolution, map_size):
 #<----------------- hash table util code ----------------->
 
 @ti.func
+def random_in_unit_disk():
+    theta = 2.0 * np.pi * ti.random()
+    return ti.Vector([ti.sin(theta), ti.cos(theta)])
+
+@ti.func
+def random_normal():
+    x = ti.random() * 2. - 1.
+    y = ti.random() * 2. - 1.
+    return ti.Vector([x, y])
+
+@ti.func
 def dir_encode_func(dir_, input):
     dir = dir_/dir_.norm()
     x = dir[0]; y = dir[1]; z = dir[2]
@@ -113,6 +125,9 @@ class NGP_fw:
         self.xyz_min = -tf_vec3(scale, scale, scale)
         self.xyz_max = tf_vec3(scale, scale, scale)
         self.half_size = (self.xyz_max - self.xyz_min) / 2
+
+        self.noise_buffer = ti.Vector.field(2, dtype=data_type, shape=(self.N_rays))
+        self.gen_noise_buffer()
 
         self.rays_o = ti.Vector.field(n=3, dtype=data_type, shape=(self.N_rays))
         self.rays_d = ti.Vector.field(n=3, dtype=data_type, shape=(self.N_rays))
@@ -192,7 +207,7 @@ class NGP_fw:
         self.lookup = np.array([0.0, -1.0, 0.0])
 
     def hash_table_init(self):
-        print(f'GridEncoding: base_res={self.base_res} b={self.per_level_scales:.5f} F={2} max_params={self.max_params} L={self.level}')
+        print(f'GridEncoding: base resolution: {self.base_res}, log scale per level:{self.per_level_scales:.5f} feature numbers per level: {2} maximum parameters per level: {self.max_params} level: {self.level}')
         offset = 0
         for i in range(self.level):
             resolution = int(np.ceil(self.base_res * np.exp(i*np.log(self.per_level_scales)) - 1.0)) + 1
@@ -270,14 +285,31 @@ class NGP_fw:
 
         return tf_vec2(t1, t2)
 
+
     @ti.kernel
-    def ray_intersect(self):
+    def gen_noise_buffer(self):
+        for i in range(self.N_rays):
+            self.noise_buffer[i] = random_normal()
+
+    @ti.kernel
+    def ray_intersect(self, dist_to_focus: float, len_dis: float):
         ti.block_local(self.pose)
         for i in self.directions: 
             c2w = self.pose[None]
-            mat_result = self.directions[i] @ c2w[:, :3].transpose()
+            dir_ori = self.directions[i]
+            offset = len_dis*self.noise_buffer[i]
+            offset_m = tf_mat1x3(
+                [[
+                    offset[0],
+                    offset[1],
+                    0.0,
+                ]]
+            )
+            c2w_dir = c2w[:, :3].transpose()
+            offset_w = offset_m @ c2w_dir
+            mat_result = (dir_ori*dist_to_focus) @ c2w_dir - offset_w
             ray_d = tf_vec3(mat_result[0, 0], mat_result[0, 1],mat_result[0, 2])
-            ray_o = c2w[:, 3]
+            ray_o = c2w[:, 3] + tf_vec3(offset_w[0, 0], offset_w[0, 1],offset_w[0, 2])
             
             t1t2 = self._ray_aabb_intersec(ray_o, ray_d)
 
@@ -563,10 +595,10 @@ class NGP_fw:
         plt.imsave('taichi_ngp.png', (rgb_np*255).astype(np.uint8))
         plt.imsave('taichi_ngp_depth.png', depth2img(depth_np))
 
-    def render(self, max_samples: int, T_threshold: float) -> Tuple[float, int, int]:
+    def render(self, max_samples, T_threshold, dist_to_focus, len_dis) -> Tuple[float, int, int]:
         samples = 0
         self.reset()
-        self.ray_intersect()
+        self.ray_intersect(dist_to_focus, len_dis)
 
         while samples < max_samples:
             N_alive = self.counter[None]
@@ -650,6 +682,8 @@ class NGP_fw:
         show_depth = False
         frame = 0
         T_threshold = 1e-1
+        dist_to_focus = 1.2
+        len_dis=0.04
         self.init_cam()
         while window.running:
             pose = self.pose.to_numpy()
@@ -692,15 +726,21 @@ class NGP_fw:
             self.lookat += position_change
             self.pose.from_numpy(pose)
 
-            with gui.sub_window("Optian", 0.05, 0.05, 0.4, 0.2) as w:
-                w.text(f'Render time: {render_time:.2f} ms')
-                T_threshold = w.slider_float('T_threshold', T_threshold, 0., 1.)
-                max_samples_for_rendering = w.slider_float("max_samples", max_samples_for_rendering, 1, 100)
-                show_depth = w.checkbox("show_depth", show_depth)
-                white_bg = w.checkbox("white_bg", white_bg)
+            with gui.sub_window("Options", 0.05, 0.05, 0.65, 0.3) as w:
+                w.text(f'General')
+                T_threshold = w.slider_float('transparency threshold', T_threshold, 0., 1.)
+                max_samples_for_rendering = w.slider_float("max samples", max_samples_for_rendering, 1, 100)
+                show_depth = w.checkbox("show depth", show_depth)
+                white_bg = w.checkbox("white background", white_bg)
 
-            with gui.sub_window("Export", 0.05, 0.3, 0.4, 0.1) as w:
-                if gui.button("snapshot"):
+                w.text(f'Camera')
+                dist_to_focus = w.slider_float("focus distance", dist_to_focus, 0.8, 3.)
+                len_dis = w.slider_float('lens size', len_dis, 0., 0.1)
+
+                w.text(f'Render time: {render_time:.2f} ms')
+
+            with gui.sub_window("Export", 0.75, 0.05, 0.2, 0.1) as w:
+                if gui.button("snapshot "):
                     ti.tools.imwrite(self.render_buffer.to_numpy(), export_dir+'snap_shot.png')
                     print("save snapshot in export folder") 
                 if gui.button('recording'):
@@ -722,7 +762,9 @@ class NGP_fw:
             t = time.time()
             _, _, _ = self.render(
                 max_samples=max_samples_for_rendering, 
-                T_threshold=T_threshold
+                T_threshold=T_threshold, 
+                dist_to_focus=dist_to_focus,
+                len_dis=len_dis,
             )
 
             if not show_depth:
