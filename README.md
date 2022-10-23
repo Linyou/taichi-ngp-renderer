@@ -52,7 +52,7 @@ However, there are some differences compared to the original:
 
 ###### Fully Fused MLP
 
-- Instead of having a single kernel like **tiny-cuda-nn**, this repo use separated kernel `sigma_layer()` and `rgb_layer()` because the shared memory size that **Taichi** currently allow is `48KB` as issue [#6385](https://github.com/taichi-dev/taichi/issues/6385) points out, This could be improved in the future.
+- Instead of having a single kernel like **tiny-cuda-nn**, this repo use separated kernel `sigma_layer()` and `rgb_layer()` because the shared memory size that **Taichi** currently allow is `48KB` as issue [#6385](https://github.com/taichi-dev/taichi/issues/6385) points out, it could be improved in the future.
 - In the **tiny-cuda-nn**, they use TensorCore for `float16` multiplication, which is not an accessible feature for Taichi, so I directly convert all the data to `ti.float16` to speed up the computation.
 
 ## GUI
@@ -63,7 +63,12 @@ This code supports real-time rendering GUI interactions with less than 1GB VRAM:
 - Changing the number of samples for each ray while rendering
 - Rendering with different resolution
 - Support video recording and export video and snapshot (Please install [ffmpeg](https://docs.taichi-lang.org/docs/export_results#install-ffmpeg-on-windows))
-- Up to 17 fps on a 3090 GPU at 800 $\times$ 800 resolution (Using default pose)
+- Up to 23 fps on a 3090 GPU at 800 $\times$ 800 resolution
+
+> In order to get 23 fps speed without damaging the visual quality, the  `T_threshold` and `max_samples` is set to 0.1 and 50, respectively.
+
+<!-- `T_threshold`: Stop rendering when transparent vaule is below this threshold.
+`max_samples`: Maximum samples for each ray. -->
 
 Run `python taichi_ngp.py --gui --scene lego` to start the GUI. This repository provided eight pre-trained NeRF synthesis scenes: _Lego, Ship, Mic, Materials, Hotdog, Ficus, Drums, Chair_
 

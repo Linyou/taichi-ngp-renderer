@@ -78,6 +78,9 @@ def grid_pos2hash_index(indicator, pos_grid_local, resolution, map_size):
 
     return hash_result % map_size
 
+
+#<----------------- hash table util code ----------------->
+
 @ti.func
 def dir_encode_func(dir_, input):
     dir = dir_/dir_.norm()
@@ -93,8 +96,6 @@ def dir_encode_func(dir_, input):
     input[14] = 1.4453057213202769*z*(x2 - y2); input[15] = 0.59004358992664352*x*(-x2 + 3.0*y2)
 
     return input
-
-#<----------------- hash table util code ----------------->
 
 @ti.data_oriented
 class NGP_fw:
@@ -562,7 +563,7 @@ class NGP_fw:
         plt.imsave('taichi_ngp.png', (rgb_np*255).astype(np.uint8))
         plt.imsave('taichi_ngp_depth.png', depth2img(depth_np))
 
-    def render(self, max_samples: int) -> Tuple[float, int, int]:
+    def render(self, max_samples: int, T_threshold: float) -> Tuple[float, int, int]:
         samples = 0
         self.reset()
         self.ray_intersect()
@@ -571,7 +572,7 @@ class NGP_fw:
             N_alive = self.counter[None]
             if N_alive == 0: break
 
-            # the number of samples to add on each ray
+            # how many more samples the number of samples add for each ray
             N_samples = max(min(self.N_rays//N_alive, 64), self.min_samples)
             samples += N_samples
             launch_model_total = N_alive * N_samples
@@ -582,23 +583,26 @@ class NGP_fw:
             self.hash_encode()
             self.sigma_layer()
             self.rgb_layer()
-            self.composite_test(N_samples, 1e-4)
+            self.composite_test(N_samples, T_threshold)
             self.re_order(N_alive)
 
         return samples, N_alive, N_samples
 
     def render_frame(self, frame_id):
         t = time.time()
-        samples, N_alive, N_samples = self.render(max_samples=100)
+        samples, N_alive, N_samples = self.render(max_samples=100, T_threshold=1e-4)
         self.write_image()
 
         print(f"samples: {samples}, N_alive: {N_alive}, N_samples: {N_samples}")
         print(f'Render time: {1000*(time.time()-t):.2f} ms')
 
     @ti.kernel
-    def rgb_to_render_buffer(self):
+    def rgb_to_render_buffer(self, white_bg: ti.i32):
         for i, j in self.render_buffer:
-            self.render_buffer[i, j] = self.rgb[(self.res[0]-j)*self.res[1]+i]
+            rgb = self.rgb[(self.res[0]-j)*self.res[1]+i]
+            if white_bg:
+                rgb += 1 - self.opacity[(self.res[0]-j)*self.res[1]+i]
+            self.render_buffer[i, j] = rgb
 
     @ti.kernel
     def depth_max(self) -> vec2:
@@ -614,7 +618,8 @@ class NGP_fw:
         for i, j in self.render_buffer:
             max_v = max_min[0]
             min_v = max_min[1]
-            pixel = (vec3(self.depth[(self.res[0]-j)*self.res[1]+i])-min_v)/(max_v-min_v)
+            depth = ti.f32(self.depth[(self.res[0]-j)*self.res[1]+i])
+            pixel = (vec3(depth)-min_v)/(max_v-min_v)
             self.render_buffer[i, j] = pixel
 
     def init_cam(self):
@@ -627,7 +632,7 @@ class NGP_fw:
         # check if the export file exists for snapshot and video
         export_dir = './export/'
         if not os.path.exists(export_dir):
-            os.makedir(export_dir)
+            os.mkdir(export_dir)
 
         W, H = self.res
         window = ti.ui.Window('Taichi NGP', (W, H))
@@ -638,11 +643,13 @@ class NGP_fw:
         last_mouse_y = None
         rotate_speed = 50
         movement_speed = 0.03
-        max_samples_for_rendering = 100
+        max_samples_for_rendering = 50
         render_time = 0
-        show_rgb = True
+        white_bg = False
         recording = False
+        show_depth = False
         frame = 0
+        T_threshold = 1e-1
         self.init_cam()
         while window.running:
             pose = self.pose.to_numpy()
@@ -661,7 +668,7 @@ class NGP_fw:
                     rotvec_y = pose[:, 0] * np.radians(rotate_speed * dy)
                     pose = R.from_rotvec(rotvec_x).as_matrix() @ R.from_rotvec(rotvec_y).as_matrix() @ pose
                     last_mouse_x, last_mouse_y = curr_mouse_x, curr_mouse_y
-                    correct_dir = 1. if pose[1, 3] > 0.0 else -1.
+                    correct_dir = 1. if pose[2, 3] < 0.0 else -1.
                     self.lookat = np.array([0., 0., correct_dir]) @ pose[:, :3].T
 
             front = (self.lookat - pose[:, 3])
@@ -687,12 +694,12 @@ class NGP_fw:
 
             with gui.sub_window("Optian", 0.05, 0.05, 0.4, 0.2) as w:
                 w.text(f'Render time: {render_time:.2f} ms')
+                T_threshold = w.slider_float('T_threshold', T_threshold, 0., 1.)
                 max_samples_for_rendering = w.slider_float("max_samples", max_samples_for_rendering, 1, 100)
-                if gui.button('show_depth'):
-                    if show_rgb:
-                        show_rgb = False
-                    else:
-                        show_rgb = True
+                show_depth = w.checkbox("show_depth", show_depth)
+                white_bg = w.checkbox("white_bg", white_bg)
+
+            with gui.sub_window("Export", 0.05, 0.3, 0.4, 0.1) as w:
                 if gui.button("snapshot"):
                     ti.tools.imwrite(self.render_buffer.to_numpy(), export_dir+'snap_shot.png')
                     print("save snapshot in export folder") 
@@ -712,11 +719,14 @@ class NGP_fw:
                     pixels_img = self.render_buffer.to_numpy()
                     video_manager.write_frame(pixels_img)
 
-
             t = time.time()
-            _, _, _ = self.render(max_samples=max_samples_for_rendering)
-            if show_rgb:
-                self.rgb_to_render_buffer()
+            _, _, _ = self.render(
+                max_samples=max_samples_for_rendering, 
+                T_threshold=T_threshold
+            )
+
+            if not show_depth:
+                self.rgb_to_render_buffer(white_bg)
             else:
                 self.depth_to_render_buffer(self.depth_max())
 
@@ -747,6 +757,7 @@ def main(args):
             os.mkdir(model_dir)
         npy_file = os.path.join(model_dir, args.scene+'.npy')
         if not os.path.exists(npy_file):
+            print(f"No {args.scene} model found, downloading ...")
             url = PRETRAINED_MODEL_URL.format(args.scene)
             wget.download(url, out=npy_file)
         ngp.load_model(npy_file)

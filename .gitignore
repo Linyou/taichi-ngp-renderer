@@ -1,6 +1,5 @@
-# imgui init file
-/*.ini 
+/imgui.ini 
 /npy_models
 /export
 /*.png
-/.DS_Store
+.DS_Store
