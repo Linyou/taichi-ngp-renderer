@@ -19,6 +19,7 @@ def depth2img(depth):
     return depth_img
 
 data_type = ti.f16
+np_type = np.float16
 tf_vec3 = ti.types.vector(3, dtype=data_type)
 tf_vec32 = ti.types.vector(32, dtype=data_type)
 tf_vec1 = ti.types.vector(1, dtype=data_type)
@@ -91,7 +92,7 @@ def random_in_unit_disk():
 def random_normal():
     x = ti.random() * 2. - 1.
     y = ti.random() * 2. - 1.
-    return ti.Vector([x, y])
+    return tf_vec2(x, y)
 
 @ti.func
 def dir_encode_func(dir_, input):
@@ -99,13 +100,14 @@ def dir_encode_func(dir_, input):
     x = dir[0]; y = dir[1]; z = dir[2]
     xy= x*y; xz= x*z; yz= y*z; x2= x*x; y2= y*y; z2= z*z
     
-    input[0] = 0.28209479177387814; input[1] = -0.48860251190291987*y; input[2] = 0.48860251190291987*z
-    input[3] = -0.48860251190291987*x; input[4] = 1.0925484305920792*xy; input[5] = -1.0925484305920792*yz
-    input[6] = 0.94617469575755997*z2 - 0.31539156525251999; input[7] = -1.0925484305920792*xz
-    input[8] = 0.54627421529603959*x2 - 0.54627421529603959*y2; input[9] = 0.59004358992664352*y*(-3.0*x2 + y2)
-    input[10] = 2.8906114426405538*xy*z; input[11] = 0.45704579946446572*y*(1.0 - 5.0*z2)
-    input[12] = 0.3731763325901154*z*(5.0*z2 - 3.0); input[13] = 0.45704579946446572*x*(1.0 - 5.0*z2)
-    input[14] = 1.4453057213202769*z*(x2 - y2); input[15] = 0.59004358992664352*x*(-x2 + 3.0*y2)
+    temp = 0.28209479177387814
+    input[0] = data_type(temp); input[1] = data_type(-0.48860251190291987*y); input[2] = data_type(0.48860251190291987*z)
+    input[3] = data_type(-0.48860251190291987*x); input[4] = data_type(1.0925484305920792*xy); input[5] = data_type(-1.0925484305920792*yz)
+    input[6] = data_type(0.94617469575755997*z2 - 0.31539156525251999); input[7] = data_type(-1.0925484305920792*xz)
+    input[8] = data_type(0.54627421529603959*x2 - 0.54627421529603959*y2); input[9] = data_type(0.59004358992664352*y*(-3.0*x2 + y2))
+    input[10] = data_type(2.8906114426405538*xy*z); input[11] = data_type(0.45704579946446572*y*(1.0 - 5.0*z2))
+    input[12] = data_type(0.3731763325901154*z*(5.0*z2 - 3.0)); input[13] = data_type(0.45704579946446572*x*(1.0 - 5.0*z2))
+    input[14] = data_type(1.4453057213202769*z*(x2 - y2)); input[15] = data_type(0.59004358992664352*x*(-x2 + 3.0*y2))
 
     return input
 
@@ -119,8 +121,9 @@ class NGP_fw:
         self.scale = scale
 
         # rays intersection parameters
+        # t1, t2 need to be initialized to -1.0
         self.hits_t = ti.Vector.field(n=2, dtype=data_type, shape=(self.N_rays))
-        self.hits_t.fill(-1.0) # t1, t2 need to be initialized to -1.0
+        self.hits_t.fill(-1.0)
         self.center = tf_vec3(0.0, 0.0, 0.0)
         self.xyz_min = -tf_vec3(scale, scale, scale)
         self.xyz_max = tf_vec3(scale, scale, scale)
@@ -133,8 +136,8 @@ class NGP_fw:
         self.rays_d = ti.Vector.field(n=3, dtype=data_type, shape=(self.N_rays))
 
         # use the pre-compute direction and scene pose
-        self.directions = ti.Matrix.field(n=1, m=3, dtype=ti.f32, shape=(self.N_rays,))
-        self.pose = ti.Matrix.field(n=3, m=4, dtype=ti.f32, shape=())
+        self.directions = ti.Matrix.field(n=1, m=3, dtype=data_type, shape=(self.N_rays,))
+        self.pose = ti.Matrix.field(n=3, m=4, dtype=data_type, shape=())
 
         # density_bitfield is used for point sampling
         self.density_bitfield = ti.field(ti.uint8, shape=(cascades*grid_size**3//8))
@@ -195,9 +198,9 @@ class NGP_fw:
         self.temp_hit = ti.field(ti.i32, shape=(self.max_samples_shape,))
 
         # results buffers
-        self.opacity = ti.field(data_type, shape=(self.N_rays,))
-        self.depth = ti.field(data_type, shape=(self.N_rays))
-        self.rgb = ti.Vector.field(3, dtype=data_type, shape=(self.N_rays,))
+        self.opacity = ti.field(ti.f32, shape=(self.N_rays,))
+        self.depth = ti.field(ti.f32, shape=(self.N_rays))
+        self.rgb = ti.Vector.field(3, dtype=ti.f32, shape=(self.N_rays,))
 
         # GUI render buffer (data type must be float32)
         self.render_buffer = ti.Vector.field(3, dtype=ti.f32, shape=(res[0], res[1],))
@@ -239,23 +242,23 @@ class NGP_fw:
         print('Loading model from {}'.format(model_path))
         model = np.load(model_path, allow_pickle=True).item()
         # model = torch.load(model_path, map_location='cpu')['state_dict']
-        self.hash_embedding.from_numpy(model['model.xyz_encoder.params'])
-        self.sigma_weights.from_numpy(model['model.xyz_sigmas.params'])
-        self.rgb_weights.from_numpy(model['model.rgb_net.params'])
+        self.hash_embedding.from_numpy(model['model.xyz_encoder.params'].astype(np_type))
+        self.sigma_weights.from_numpy(model['model.xyz_sigmas.params'].astype(np_type))
+        self.rgb_weights.from_numpy(model['model.rgb_net.params'].astype(np_type))
 
         self.density_bitfield.from_numpy(model['model.density_bitfield'])
 
-        self.pose.from_numpy(model['poses'][20])
+        self.pose.from_numpy(model['poses'][20].astype(np_type))
         if self.res[0] != 800 or self.res[1] != 800:
-            directions = self.get_direction(model['camera_angle_x'])[:, None, :]
+            directions = self.get_direction(model['camera_angle_x'])[:, None, :].astype(np_type)
         else:
-            directions = model['directions'][:, None, :]
+            directions = model['directions'][:, None, :].astype(np_type)
 
         self.directions.from_numpy(directions)
 
     @staticmethod
     def taichi_init(kernel_profiler):
-        ti.init(arch=ti.cuda, offline_cache=True, kernel_profiler=kernel_profiler)
+        ti.init(arch=ti.cuda, offline_cache=True, kernel_profiler=kernel_profiler, enable_fallback=False)
         # ti.init(arch=ti.vulkan, offline_cache=True, kernel_profiler=kernel_profiler)
 
     @staticmethod
@@ -292,7 +295,7 @@ class NGP_fw:
             self.noise_buffer[i] = random_normal()
 
     @ti.kernel
-    def ray_intersect(self, dist_to_focus: float, len_dis: float):
+    def ray_intersect_dof(self, dist_to_focus: float, len_dis: float):
         ti.block_local(self.pose)
         for i in self.directions: 
             c2w = self.pose[None]
@@ -310,6 +313,24 @@ class NGP_fw:
             mat_result = (dir_ori*dist_to_focus) @ c2w_dir - offset_w
             ray_d = tf_vec3(mat_result[0, 0], mat_result[0, 1],mat_result[0, 2])
             ray_o = c2w[:, 3] + tf_vec3(offset_w[0, 0], offset_w[0, 1],offset_w[0, 2])
+            
+            t1t2 = self._ray_aabb_intersec(ray_o, ray_d)
+
+            if t1t2[1] > 0.0:
+                self.hits_t[i][0] = data_type(ti.max(t1t2[0], NEAR_DISTANCE))
+                self.hits_t[i][1] = t1t2[1]  
+
+            self.rays_o[i] = ray_o
+            self.rays_d[i] = ray_d
+
+    @ti.kernel
+    def ray_intersect(self):
+        ti.block_local(self.pose)
+        for i in self.directions: 
+            c2w = self.pose[None]
+            mat_result = self.directions[i] @ c2w[:, :3].transpose()
+            ray_d = tf_vec3(mat_result[0, 0], mat_result[0, 1],mat_result[0, 2])
+            ray_o = c2w[:, 3]
             
             t1t2 = self._ray_aabb_intersec(ray_o, ray_d)
 
@@ -429,12 +450,12 @@ class NGP_fw:
                 for d in ti.static(range(3)):
                     if (idx & (1 << d)) == 0:
                         pos_grid_local[d] = pos_grid_uint[d]
-                        w *= 1 - pos[d]
+                        w *= data_type(1 - pos[d])
                     else:
                         pos_grid_local[d] = pos_grid_uint[d] + 1
-                        w *= pos[d]
+                        w *= data_type(pos[d])
 
-                index = grid_pos2hash_index(indicator, pos_grid_local, resolution, map_size)
+                index = ti.int32(grid_pos2hash_index(indicator, pos_grid_local, resolution, map_size))
 
                 local_feature_0 += data_type(w * self.hash_embedding[offset+index*2])
                 local_feature_1 += data_type(w * self.hash_embedding[offset+index*2+1])
@@ -542,7 +563,7 @@ class NGP_fw:
                 c_index = self.current_index[None]
                 r = self.alive_indices[n*2+c_index]
 
-                T = 1.0 - self.opacity[r]
+                T = data_type(1.0 - self.opacity[r])
 
                 start_idx = n * max_samples
 
@@ -595,10 +616,13 @@ class NGP_fw:
         plt.imsave('taichi_ngp.png', (rgb_np*255).astype(np.uint8))
         plt.imsave('taichi_ngp_depth.png', depth2img(depth_np))
 
-    def render(self, max_samples, T_threshold, dist_to_focus, len_dis) -> Tuple[float, int, int]:
+    def render(self, max_samples, T_threshold, use_dof=False, dist_to_focus=0.8, len_dis=0.0) -> Tuple[float, int, int]:
         samples = 0
         self.reset()
-        self.ray_intersect(dist_to_focus, len_dis)
+        if use_dof:
+            self.ray_intersect_dof(dist_to_focus, len_dis)
+        else:
+            self.ray_intersect()
 
         while samples < max_samples:
             N_alive = self.counter[None]
@@ -638,8 +662,8 @@ class NGP_fw:
 
     @ti.kernel
     def depth_max(self) -> vec2:
-        max_v = ti.f32(self.depth[0])
-        min_v = ti.f32(self.depth[0])
+        max_v = self.depth[0]
+        min_v = self.depth[0]
         for i in ti.ndrange(self.N_rays):
             ti.atomic_max(max_v, self.depth[i])
             ti.atomic_min(min_v, self.depth[i])
@@ -650,7 +674,7 @@ class NGP_fw:
         for i, j in self.render_buffer:
             max_v = max_min[0]
             min_v = max_min[1]
-            depth = ti.f32(self.depth[(self.res[0]-j)*self.res[1]+i])
+            depth = self.depth[(self.res[0]-j)*self.res[1]+i]
             pixel = (vec3(depth)-min_v)/(max_v-min_v)
             self.render_buffer[i, j] = pixel
 
@@ -680,6 +704,7 @@ class NGP_fw:
         white_bg = False
         recording = False
         show_depth = False
+        use_dof = False
         frame = 0
         T_threshold = 1e-1
         dist_to_focus = 1.2
@@ -724,9 +749,9 @@ class NGP_fw:
                 position_change = -up * movement_speed
             pose[:, 3] += position_change
             self.lookat += position_change
-            self.pose.from_numpy(pose)
+            self.pose.from_numpy(pose.astype(np.float16))
 
-            with gui.sub_window("Options", 0.05, 0.05, 0.65, 0.3) as w:
+            with gui.sub_window("Options", 0.05, 0.05, 0.68, 0.3) as w:
                 w.text(f'General')
                 T_threshold = w.slider_float('transparency threshold', T_threshold, 0., 1.)
                 max_samples_for_rendering = w.slider_float("max samples", max_samples_for_rendering, 1, 100)
@@ -734,6 +759,7 @@ class NGP_fw:
                 white_bg = w.checkbox("white background", white_bg)
 
                 w.text(f'Camera')
+                use_dof = w.checkbox("apply depth of field", use_dof)
                 dist_to_focus = w.slider_float("focus distance", dist_to_focus, 0.8, 3.)
                 len_dis = w.slider_float('lens size', len_dis, 0., 0.1)
 
@@ -763,6 +789,7 @@ class NGP_fw:
             _, _, _ = self.render(
                 max_samples=max_samples_for_rendering, 
                 T_threshold=T_threshold, 
+                use_dof=use_dof,
                 dist_to_focus=dist_to_focus,
                 len_dis=len_dis,
             )

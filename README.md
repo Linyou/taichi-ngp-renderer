@@ -59,7 +59,7 @@ However, there are some differences compared to the original:
 
 ## GUI
 
-This code supports real-time rendering GUI interactions with less than 1GB VRAM. Here are the options that the GUI offers:
+This code supports real-time rendering GUI interactions with less than 1GB VRAM. Here are the functionality that the GUI offers:
 
 - **Camera:**
   - keyboard and mouse control
@@ -74,7 +74,7 @@ This code supports real-time rendering GUI interactions with less than 1GB VRAM.
   - Snapshot
   - Video recording (Required [ffmpeg](https://docs.taichi-lang.org/docs/export_results#install-ffmpeg-on-windows))
 
-> the GUI is running up to 23 fps on a 3090 GPU at 800 $\times$ 800 resolution. In order to get 23 fps speed without damaging the visual quality, the  `T_threshold` and `max_samples` is set to 0.1 and 50, respectively.
+> the GUI is running up to 26 fps on a 3090 GPU at 800 $\times$ 800 resolution. In order to get 26 fps speed without damaging the visual quality, the  `T_threshold` and `max_samples` is set to 0.1 and 50, respectively.
 
 <!-- `T_threshold`: Stop rendering when transparent vaule is below this threshold.
 `max_samples`: Maximum samples for each ray. -->
