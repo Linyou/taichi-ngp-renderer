@@ -100,6 +100,17 @@ Running `python taichi_ngp.py --gui --scene <name>` will automatically download 
 
 You can train a new scene with [ngp_pl](https://github.com/kwea123/ngp_pl) and save the pytorch model to numpy using `np.save()`. After that, use the `--model_path` argument to specify the model file.
 
+## Acknowledgments
+
+ Many thanks to the incredible projects that open-source to the community, including:
+
+- [Instant-NGP](https://github.com/NVlabs/instant-ngp)
+- [tiny-cuda-nn](https://github.com/NVlabs/tiny-cuda-nn)
+- [ngp_pl](https://github.com/kwea123/ngp_pl)
+- [Taichi](https://github.com/taichi-dev/taichi)
+
+
+
 ## Todo
 
 - [ ] Refactor to separate modules
