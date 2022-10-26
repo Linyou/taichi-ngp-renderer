@@ -501,18 +501,19 @@ class NGP_fw:
                     input[i, tid] = self.xyzs_embedding[sn, i]
 
                 for i in range(64):
-                    hid1[i, tid] = init_val[0]
-                    ti.simt.block.sync()
+                    temp = init_val[0]
                     for j in ti.static(range(32)):
-                        hid1[i, tid] += input[j, tid] * weight[i*32+j]
-                        ti.simt.block.sync()
+                        temp += input[j, tid] * weight[i*32+j]
+
+                    hid1[i, tid] = temp
+                ti.simt.block.sync()
                 
                 for i in range(16):
-                    hid2[i, tid] = init_val[0]
-                    ti.simt.block.sync()
+                    temp = init_val[0]
                     for j in ti.static(range(64)):
-                        hid2[i, tid] += data_type(ti.max(0.0, hid1[j, tid])) * weight[64*32+i*64+j]
-                        ti.simt.block.sync()
+                        temp += data_type(ti.max(0.0, hid1[j, tid])) * weight[64*32+i*64+j]
+                    hid2[i, tid] = temp
+                ti.simt.block.sync()
 
                 self.out_1[self.temp_hit[sn]] = data_type(ti.exp(hid2[0, tid]))
                 for i in ti.static(range(16)):
@@ -545,25 +546,28 @@ class NGP_fw:
                     input[16+i] = self.final_embedding[sn, i]
 
                 for i in range(64):
-                    hid1[i, tid] = init_val[0]
-                    ti.simt.block.sync()
+                    temp = init_val[0]
                     for j in ti.static(range(32)):
-                        hid1[i, tid] += input[j] * weight[i*32+j]
-                        ti.simt.block.sync()
+                        temp += input[j] * weight[i*32+j]
+
+                    hid1[i, tid] = temp
+                ti.simt.block.sync()
 
                 for i in range(64):
-                    hid2[i, tid] = init_val[0]
-                    ti.simt.block.sync()
+                    temp = init_val[0]
                     for j in ti.static(range(64)):
-                        hid2[i, tid] += data_type(ti.max(0.0, hid1[j, tid])) * weight[64*32+i*64+j]
-                        ti.simt.block.sync()
+                        temp += data_type(ti.max(0.0, hid1[j, tid])) * weight[64*32+i*64+j]
+
+                    hid2[i, tid] = temp
+                ti.simt.block.sync()
 
                 for i in range(3):
-                    hid1[i, tid] = init_val[0]
-                    ti.simt.block.sync()
+                    temp = init_val[0]
                     for j in ti.static(range(64)):
-                        hid1[i, tid] += data_type(ti.max(0.0, hid2[j, tid])) * weight[64*32+64*64+i*64+j]
-                        ti.simt.block.sync()
+                        temp += data_type(ti.max(0.0, hid2[j, tid])) * weight[64*32+64*64+i*64+j]
+
+                    hid1[i, tid] = temp
+                ti.simt.block.sync()
 
                 for i in ti.static(range(3)):
                     self.out_3[self.temp_hit[sn], i] = data_type(1 / (1 + ti.exp(-hid1[i, tid])))
@@ -712,7 +716,7 @@ class NGP_fw:
         last_mouse_y = None
         rotate_speed = 50
         movement_speed = 0.03
-        max_samples_for_rendering = 100
+        max_samples_for_rendering = 50
         render_time = 0
         # white_bg = False
         recording = False
@@ -720,7 +724,7 @@ class NGP_fw:
         use_dof = True
         last_use_dof = False
         frame = 0
-        T_threshold = 1e-2
+        T_threshold = 1e-1
         dist_to_focus = 1.2
         len_dis=0.04
         self.init_cam()
