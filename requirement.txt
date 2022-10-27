@@ -1,3 +1,4 @@
+taichi >= 1.2.0
 wget
 numpy
 scipy

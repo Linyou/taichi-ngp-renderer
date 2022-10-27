@@ -2,6 +2,7 @@
 
 [![License](https://img.shields.io/badge/license-Apache-green.svg)](LICENSE)
 
+##### Update 2022-10-27: Support all platforms, Windows and Linux (CUDA, Vulkan), MacOS (Vulkan)
 ##### Update 2022-10-23: Support depth of field (DoF)
 
 This is an [Instant-NGP](https://github.com/NVlabs/instant-ngp) renderer implemented using [Taichi](https://github.com/taichi-dev/taichi), written entirely in Python. **No CUDA!** This repository only implemented the rendering part of the NGP but is more simple and has a lesser amount of code compared to the original (Instant-NGP and [tiny-cuda-nn](https://github.com/NVlabs/tiny-cuda-nn)).
@@ -18,13 +19,8 @@ This is an [Instant-NGP](https://github.com/NVlabs/instant-ngp) renderer impleme
 
 ## Installation
 
-Install Taichi to get started:
-
-```bash
-pip install -i https://pypi.taichi.graphics/simple/ taichi-nightly
-```
-> **Note**
-> There is a bug in Taichi codegen that a `uint32` value can not properly work on a modulo operation. You have to install nightly version in which they have this bug fixed. See detail in issue [#6118](https://github.com/taichi-dev/taichi/issues/6118)
+<!-- > **Note**
+> There is a bug in Taichi codegen that a `uint32` value can not properly work on a modulo operation. You have to install nightly version in which they have this bug fixed. See detail in issue [#6118](https://github.com/taichi-dev/taichi/issues/6118) -->
 
 Clone this repository and install the required package:
 
@@ -69,12 +65,11 @@ This code supports real-time rendering GUI interactions with less than 1GB VRAM.
   - the number of samples for each ray
   - transparency threshold (Stop ray marching)
   - show depth
-  - black and white background
 - **Export:**
   - Snapshot
   - Video recording (Required [ffmpeg](https://docs.taichi-lang.org/docs/export_results#install-ffmpeg-on-windows))
 
-> the GUI is running up to 26 fps on a 3090 GPU at 800 $\times$ 800 resolution. In order to get 26 fps speed without damaging the visual quality, the  `T_threshold` and `max_samples` is set to 0.1 and 50, respectively.
+> the GUI is running up to 66 fps on a 3090 GPU at 800 $\times$ 800 resolution (default pose).
 
 <!-- `T_threshold`: Stop rendering when transparent vaule is below this threshold.
 `max_samples`: Maximum samples for each ray. -->
@@ -113,8 +108,8 @@ You can train a new scene with [ngp_pl](https://github.com/kwea123/ngp_pl) and s
 
 ## Todo
 
+- [x] Support Vulkan backend
 - [ ] Refactor to separate modules
-- [ ] Support Vulkan backend
 - [ ] Support real scenes
 
 ...

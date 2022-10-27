@@ -1,3 +1,4 @@
+from multiprocessing import shared_memory
 import os
 import numpy as np
 import argparse
@@ -8,6 +9,7 @@ import taichi as ti
 from taichi.math import uvec3, vec3, vec2
 import wget
 import cv2
+import platform
 
 from typing import Tuple
 
@@ -18,6 +20,15 @@ def depth2img(depth):
 
     return depth_img
 
+arch = ti.cuda if ti._lib.core.with_cuda() else ti.vulkan
+
+if platform.system() == 'Darwin':
+    block_dim = 64
+else:
+    block_dim = 128
+
+sigma_sm_preload = int(128/block_dim)*24
+rgb_sm_preload = int(128/block_dim)*50
 data_type = ti.f16
 np_type = np.float16
 tf_vec3 = ti.types.vector(3, dtype=data_type)
@@ -195,7 +206,7 @@ class NGP_fw:
 
         # intermediate buffers for network
         self.xyzs_embedding = ti.field(data_type, shape=(self.max_samples_shape, 32))
-        # self.final_embedding = ti.field(data_type, shape=(self.max_samples_shape, 16))
+        self.final_embedding = ti.field(data_type, shape=(self.max_samples_shape, 16))
         self.out_3 = ti.field(data_type, shape=(self.max_samples_shape, 3))
         self.out_1 = ti.field(data_type, shape=(self.max_samples_shape,))
         self.temp_hit = ti.field(ti.i32, shape=(self.max_samples_shape,))
@@ -261,8 +272,7 @@ class NGP_fw:
 
     @staticmethod
     def taichi_init(kernel_profiler):
-        ti.init(arch=ti.cuda, offline_cache=True, kernel_profiler=kernel_profiler, enable_fallback=False)
-        # ti.init(arch=ti.vulkan, offline_cache=True, kernel_profiler=kernel_profiler)
+        ti.init(arch=arch, offline_cache=True, kernel_profiler=kernel_profiler, enable_fallback=False)
 
     @staticmethod
     def taichi_print_profiler():
@@ -419,7 +429,7 @@ class NGP_fw:
                 self.temp_hit[index] = i
 
         self.model_launch[None] += 1
-        self.padd_block_network[None] = ((self.model_launch[None]+ 128 - 1)// 128) *128
+        self.padd_block_network[None] = ((self.model_launch[None]+ block_dim - 1)// block_dim) *block_dim
         # self.padd_block_composite[None] = ((self.counter[None]+ 128 - 1)// 128) *128
 
     @ti.kernel
@@ -480,24 +490,118 @@ class NGP_fw:
             self.xyzs_embedding[sn, level*2+1] = local_feature_1
 
     @ti.kernel
-    def FullyFusedMLP(self):
-        ti.loop_config(block_dim=128)
+    def sigma_layer(self):
+        ti.loop_config(block_dim=block_dim)
         for sn in ti.ndrange(self.padd_block_network[None]):
-            ray_id = self.temp_hit[sn]
-            tid = sn % 128
+            tid = sn % block_dim
             did_launch_num = self.model_launch[None]
             init_val = tf_vec1(0.0)
-            
+            input = ti.simt.block.SharedArray((32, block_dim), data_type)
+            weight = ti.simt.block.SharedArray((64*32+64*16,), data_type)
+            hid1 = ti.simt.block.SharedArray((64, block_dim), data_type)
+            hid2 = ti.simt.block.SharedArray((16, block_dim), data_type)
+            for i in ti.static(range(sigma_sm_preload)):
+                k = tid*sigma_sm_preload+i
+                weight[k] = self.sigma_weights[k]
+            ti.simt.block.sync()
+
+            if sn < did_launch_num:
+                
+                for i in ti.static(range(32)):
+                    input[i, tid] = self.xyzs_embedding[sn, i]
+
+                for i in range(64):
+                    temp = init_val[0]
+                    for j in ti.static(range(32)):
+                        temp += input[j, tid] * weight[i*32+j]
+
+                    hid1[i, tid] = temp
+                ti.simt.block.sync()
+                
+                for i in range(16):
+                    temp = init_val[0]
+                    for j in ti.static(range(64)):
+                        temp += data_type(ti.max(0.0, hid1[j, tid])) * weight[64*32+i*64+j]
+                    hid2[i, tid] = temp
+                ti.simt.block.sync()
+
+                self.out_1[self.temp_hit[sn]] = data_type(ti.exp(hid2[0, tid]))
+                for i in ti.static(range(16)):
+                    self.final_embedding[sn, i] = hid2[i, tid]
+                
+                ti.simt.block.sync()
+
+    @ti.kernel
+    def rgb_layer(self):
+        ti.loop_config(block_dim=block_dim)
+        for sn in ti.ndrange(self.padd_block_network[None]):
+            ray_id = self.temp_hit[sn]
+            tid = sn % block_dim
+            did_launch_num = self.model_launch[None]
+            init_val = tf_vec1(0.0)
+            weight = ti.simt.block.SharedArray((64*32+64*64+64*4,), data_type)
+            hid1 = ti.simt.block.SharedArray((64, block_dim), data_type)
+            hid2 = ti.simt.block.SharedArray((64, block_dim), data_type)
+            for i in ti.static(range(rgb_sm_preload)):
+                k = tid*rgb_sm_preload+i
+                weight[k] = self.rgb_weights[k]
+            ti.simt.block.sync()
+
+            if sn < did_launch_num:
+                
+                dir_ = self.dirs[ray_id]
+                input = dir_encode_func(dir_)
+
+                for i in ti.static(range(16)):
+                    input[16+i] = self.final_embedding[sn, i]
+
+                for i in range(64):
+                    temp = init_val[0]
+                    for j in ti.static(range(32)):
+                        temp += input[j] * weight[i*32+j]
+
+                    hid1[i, tid] = temp
+                ti.simt.block.sync()
+
+                for i in range(64):
+                    temp = init_val[0]
+                    for j in ti.static(range(64)):
+                        temp += data_type(ti.max(0.0, hid1[j, tid])) * weight[64*32+i*64+j]
+
+                    hid2[i, tid] = temp
+                ti.simt.block.sync()
+
+                for i in ti.static(range(3)):
+                    temp = init_val[0]
+                    for j in ti.static(range(64)):
+                        temp += data_type(ti.max(0.0, hid2[j, tid])) * weight[64*32+64*64+i*64+j]
+
+                    hid1[i, tid] = temp
+                ti.simt.block.sync()
+
+                for i in ti.static(range(3)):
+                    self.out_3[self.temp_hit[sn], i] = data_type(1 / (1 + ti.exp(-hid1[i, tid])))
+                ti.simt.block.sync()
+
+
+    @ti.kernel
+    def FullyFusedMLP(self):
+        ti.loop_config(block_dim=block_dim)
+        for sn in ti.ndrange(self.padd_block_network[None]):
+            ray_id = self.temp_hit[sn]
+            tid = sn % block_dim
+            did_launch_num = self.model_launch[None]
+            init_val = tf_vec1(0.0)
             input_2 = tf_vec32(0.0)
             weight = ti.simt.block.SharedArray((64*32+64*64+64*4,), data_type)
-            hid2_2 = ti.simt.block.SharedArray((32*128,), data_type)
-            hid2_1 = ti.simt.block.SharedArray((32*128,), data_type)
-            hid1 = ti.simt.block.SharedArray((64*128,), data_type)
-            for i in ti.static(range(50)):
-                k = tid*50+i
+            hid2_2 = ti.simt.block.SharedArray((32*block_dim,), data_type)
+            hid2_1 = ti.simt.block.SharedArray((32*block_dim,), data_type)
+            hid1 = ti.simt.block.SharedArray((64*block_dim,), data_type)
+            for i in ti.static(range(rgb_sm_preload)):
+                k = tid*rgb_sm_preload+i
                 weight[k] = self.rgb_weights[k]
-            for i in range(24):
-                k = tid*24+i
+            for i in ti.static(range(sigma_sm_preload)):
+                k = tid*sigma_sm_preload+i
                 hid2_1[k] = self.sigma_weights[k]
             ti.simt.block.sync()
 
@@ -508,52 +612,53 @@ class NGP_fw:
                 input = dir_encode_func(dir_)
 
                 for i in range(64):
-                    hid1[i*128+tid] = init_val[0]
-                    ti.simt.block.sync()
+                    temp = init_val[0]
                     for j in ti.static(range(32)):
-                        hid1[i*128+tid] += input_2[j] * hid2_1[i*32+j]
-                        ti.simt.block.sync()
+                        temp += input_2[j] * hid2_1[i*32+j]
+                    hid1[i*block_dim+tid] = temp
+                ti.simt.block.sync()
 
                 for i in (range(16)):
-                    hid2_2[i*128+tid] = init_val[0]
-                    ti.simt.block.sync()
+                    temp = init_val[0]
                     for j in ti.static(range(64)):
-                        hid2_2[i*128+tid] += data_type(ti.max(0.0, hid1[j*128+tid])) * hid2_1[64*32+i*64+j]
-                        ti.simt.block.sync()
+                        temp += data_type(ti.max(0.0, hid1[j*block_dim+tid])) * hid2_1[64*32+i*64+j]
+                    hid2_2[i*block_dim+tid] = temp
+                ti.simt.block.sync()
 
                 out1 = data_type(ti.exp(hid2_2[tid]))
 
                 for i in ti.static(range(16)):
-                    input[16+i] = hid2_2[i*128+tid]
+                    input[16+i] = hid2_2[i*block_dim+tid]
 
                 for i in range(64):
-                    hid1[i*128+tid] = init_val[0]
-                    ti.simt.block.sync()
+                    temp = init_val[0]
                     for j in ti.static(range(32)):
-                        hid1[i*128+tid] += input[j] * weight[i*32+j]
-                        ti.simt.block.sync()
+                        temp += input[j] * weight[i*32+j]
+                    hid1[i*block_dim+tid] = temp
+                ti.simt.block.sync()
 
                 for i in range(32):
-                    hid2_1[i*128+tid] = init_val[0]
-                    hid2_2[i*128+tid] = init_val[0]
-                    ti.simt.block.sync()
+                    temp1 = init_val[0]
+                    temp2 = init_val[0]
                     for j in ti.static(range(64)):
-                        hid2_1[i*128+tid] += data_type(ti.max(0.0, hid1[j*128+tid])) * weight[64*32+i*64+j]
-                        hid2_2[i*128+tid] += data_type(ti.max(0.0, hid1[j*128+tid])) * weight[64*32+(i+32)*64+j]
-                        ti.simt.block.sync()
+                        temp1+= data_type(ti.max(0.0, hid1[j*block_dim+tid])) * weight[64*32+i*64+j]
+                        temp2+= data_type(ti.max(0.0, hid1[j*block_dim+tid])) * weight[64*32+(i+32)*64+j]
+                    hid2_1[i*block_dim+tid] = temp1
+                    hid2_2[i*block_dim+tid] = temp2
+                ti.simt.block.sync()
 
-                for i in range(3):
-                    hid1[i*128+tid] = init_val[0]
-                    ti.simt.block.sync()
+                for i in ti.static(range(3)):
+                    temp = init_val[0]
                     for j in ti.static(range(32)):
-                        hid1[i*128+tid] += data_type(ti.max(0.0, hid2_1[j*128+tid])) * weight[64*32+64*64+i*64+j]
-                        ti.simt.block.sync()
-                        hid1[i*128+tid] += data_type(ti.max(0.0, hid2_2[j*128+tid])) * weight[64*32+64*64+i*64+j+32]
-                        ti.simt.block.sync()
+                        temp += data_type(ti.max(0.0, hid2_1[j*block_dim+tid])) * weight[64*32+64*64+i*64+j]
+                        # ti.simt.block.sync()
+                        temp += data_type(ti.max(0.0, hid2_2[j*block_dim+tid])) * weight[64*32+64*64+i*64+j+32]
+                    hid1[i*block_dim+tid] = temp
+                ti.simt.block.sync()
 
                 self.out_1[self.temp_hit[sn]] = out1
                 for i in ti.static(range(3)):
-                    self.out_3[self.temp_hit[sn], i] = data_type(1 / (1 + ti.exp(-hid1[i*128+tid])))
+                    self.out_3[self.temp_hit[sn], i] = data_type(1 / (1 + ti.exp(-hid1[i*block_dim+tid])))
                 ti.simt.block.sync()
 
 
@@ -640,7 +745,9 @@ class NGP_fw:
             self.rearange_index(launch_model_total)
             # self.dir_encode()
             self.hash_encode()
-            self.FullyFusedMLP()
+            self.sigma_layer()
+            self.rgb_layer()
+            # self.FullyFusedMLP()
             self.composite_test(N_samples, T_threshold)
             self.re_order(N_alive)
 
