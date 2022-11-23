@@ -5,7 +5,7 @@
 ##### Update 2022-10-27: Support all platforms, Windows and Linux (CUDA, Vulkan), MacOS (Vulkan)
 ##### Update 2022-10-23: Support depth of field (DoF)
 
-This is an [Instant-NGP](https://github.com/NVlabs/instant-ngp) renderer implemented using [Taichi](https://github.com/taichi-dev/taichi), written entirely in Python. **No CUDA!** This repository only implemented the rendering part of the NGP but is more simple and has a lesser amount of code compared to the original (Instant-NGP and [tiny-cuda-nn](https://github.com/NVlabs/tiny-cuda-nn)).
+This is a [Instant-NGP](https://github.com/NVlabs/instant-ngp) renderer implemented using [Taichi](https://github.com/taichi-dev/taichi), written entirely in Python. **No CUDA!** This repository only implemented the rendering part of the NGP but is more simple and has a lesser amount of code compared to the original (Instant-NGP and [tiny-cuda-nn](https://github.com/NVlabs/tiny-cuda-nn)).
 
 <!-- It is fun to write this code that implements even just the rendering part of the NGP, especially when you compare it original repo, which is a hundred lines verse thousands (Instant-NGP and [tiny-cuda-nn](https://github.com/NVlabs/tiny-cuda-nn)). -->
 
@@ -58,13 +58,12 @@ However, there are some differences compared to the original:
 This code supports real-time rendering GUI interactions with less than 1GB VRAM. Here are the functionality that the GUI offers:
 
 - **Camera:**
-  - keyboard and mouse control
+  - Keyboard and mouse control
   - DoF
 - **Rendering:**
-  - different resolution
-  - the number of samples for each ray
-  - transparency threshold (Stop ray marching)
-  - show depth
+  - The number of samples for each ray
+  - Transparency threshold (Stop ray marching)
+  - Show depth
 - **Export:**
   - Snapshot
   - Video recording (Required [ffmpeg](https://docs.taichi-lang.org/docs/export_results#install-ffmpeg-on-windows))
