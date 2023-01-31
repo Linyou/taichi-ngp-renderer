@@ -21,6 +21,7 @@ def depth2img(depth):
     return depth_img
 
 arch = ti.cuda if ti._lib.core.with_cuda() else ti.vulkan
+# arch = ti.vulkan
 
 if platform.system() == 'Darwin':
     block_dim = 64
@@ -516,20 +517,20 @@ class NGP_fw:
                         temp += input[j, tid] * weight[i*32+j]
 
                     hid1[i, tid] = temp
-                ti.simt.block.sync()
+                # ti.simt.block.sync()
                 
                 for i in range(16):
                     temp = init_val[0]
                     for j in ti.static(range(64)):
                         temp += data_type(ti.max(0.0, hid1[j, tid])) * weight[64*32+i*64+j]
                     hid2[i, tid] = temp
-                ti.simt.block.sync()
+                # ti.simt.block.sync()
 
                 self.out_1[self.temp_hit[sn]] = data_type(ti.exp(hid2[0, tid]))
                 for i in ti.static(range(16)):
                     self.final_embedding[sn, i] = hid2[i, tid]
                 
-                ti.simt.block.sync()
+                # ti.simt.block.sync()
 
     @ti.kernel
     def rgb_layer(self):
@@ -539,7 +540,7 @@ class NGP_fw:
             tid = sn % block_dim
             did_launch_num = self.model_launch[None]
             init_val = tf_vec1(0.0)
-            weight = ti.simt.block.SharedArray((64*32+64*64+64*4,), data_type)
+            weight = ti.simt.block.SharedArray((64*32+64*64+64*16,), data_type)
             hid1 = ti.simt.block.SharedArray((64, block_dim), data_type)
             hid2 = ti.simt.block.SharedArray((64, block_dim), data_type)
             for i in ti.static(range(rgb_sm_preload)):
@@ -561,7 +562,7 @@ class NGP_fw:
                         temp += input[j] * weight[i*32+j]
 
                     hid1[i, tid] = temp
-                ti.simt.block.sync()
+                # ti.simt.block.sync()
 
                 for i in range(64):
                     temp = init_val[0]
@@ -569,7 +570,7 @@ class NGP_fw:
                         temp += data_type(ti.max(0.0, hid1[j, tid])) * weight[64*32+i*64+j]
 
                     hid2[i, tid] = temp
-                ti.simt.block.sync()
+                # ti.simt.block.sync()
 
                 for i in ti.static(range(3)):
                     temp = init_val[0]
@@ -577,11 +578,11 @@ class NGP_fw:
                         temp += data_type(ti.max(0.0, hid2[j, tid])) * weight[64*32+64*64+i*64+j]
 
                     hid1[i, tid] = temp
-                ti.simt.block.sync()
+                # ti.simt.block.sync()
 
                 for i in ti.static(range(3)):
                     self.out_3[self.temp_hit[sn], i] = data_type(1 / (1 + ti.exp(-hid1[i, tid])))
-                ti.simt.block.sync()
+                # ti.simt.block.sync()
 
 
     @ti.kernel
@@ -616,16 +617,17 @@ class NGP_fw:
                     for j in ti.static(range(32)):
                         temp += input_2[j] * hid2_1[i*32+j]
                     hid1[i*block_dim+tid] = temp
-                ti.simt.block.sync()
+                # ti.simt.block.sync()
 
                 for i in (range(16)):
                     temp = init_val[0]
                     for j in ti.static(range(64)):
                         temp += data_type(ti.max(0.0, hid1[j*block_dim+tid])) * hid2_1[64*32+i*64+j]
                     hid2_2[i*block_dim+tid] = temp
-                ti.simt.block.sync()
+                # ti.simt.block.sync()
 
                 out1 = data_type(ti.exp(hid2_2[tid]))
+                ti.simt.block.sync()
 
                 for i in ti.static(range(16)):
                     input[16+i] = hid2_2[i*block_dim+tid]
@@ -635,7 +637,7 @@ class NGP_fw:
                     for j in ti.static(range(32)):
                         temp += input[j] * weight[i*32+j]
                     hid1[i*block_dim+tid] = temp
-                ti.simt.block.sync()
+                # ti.simt.block.sync()
 
                 for i in range(32):
                     temp1 = init_val[0]
@@ -645,7 +647,7 @@ class NGP_fw:
                         temp2+= data_type(ti.max(0.0, hid1[j*block_dim+tid])) * weight[64*32+(i+32)*64+j]
                     hid2_1[i*block_dim+tid] = temp1
                     hid2_2[i*block_dim+tid] = temp2
-                ti.simt.block.sync()
+                # ti.simt.block.sync()
 
                 for i in ti.static(range(3)):
                     temp = init_val[0]
@@ -654,7 +656,7 @@ class NGP_fw:
                         # ti.simt.block.sync()
                         temp += data_type(ti.max(0.0, hid2_2[j*block_dim+tid])) * weight[64*32+64*64+i*64+j+32]
                     hid1[i*block_dim+tid] = temp
-                ti.simt.block.sync()
+                # ti.simt.block.sync()
 
                 self.out_1[self.temp_hit[sn]] = out1
                 for i in ti.static(range(3)):
@@ -753,13 +755,15 @@ class NGP_fw:
 
         return samples, N_alive, N_samples
 
-    def render_frame(self, frame_id):
+    def render_frame(self, n=1):
         t = time.time()
-        samples, N_alive, N_samples = self.render(max_samples=100, T_threshold=1e-4)
-        self.write_image()
-
+        for _ in range(n):
+            samples, N_alive, N_samples = self.render(max_samples=100, T_threshold=1e-2)
+        ti.sync()
         print(f"samples: {samples}, N_alive: {N_alive}, N_samples: {N_samples}")
-        print(f'Render time: {1000*(time.time()-t):.2f} ms')
+        print(f'Render time: {1000*(time.time()-t)/n:.2f} ms')   
+
+        self.write_image()
 
     @ti.kernel
     def rgb_to_render_buffer(self, frame: ti.i32):
@@ -958,7 +962,7 @@ def main(args):
     ngp.hash_table_init()
 
     if not args.gui:
-        ngp.render_frame(0)
+        ngp.render_frame(args.run_n)
     else:
         ngp.render_gui()
 
@@ -969,6 +973,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--res', type=int, default=800)
+    parser.add_argument('--run_n', type=int, default=1)
     parser.add_argument('--scene', type=str, default='lego',
                         choices=['ship', 'mic', 'materials', 'lego', 'hotdog', 'ficus', 'drums', 'chair'],)
     parser.add_argument('--model_path', type=str, default=None)
