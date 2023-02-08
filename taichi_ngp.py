@@ -160,8 +160,8 @@ class NGP_fw:
         self.res = res
         self.N_rays = res[0] * res[1]
         self.grid_size = grid_size
-        self.exp_step_factor = exp_step_factor
-        self.scale = scale
+        # self.exp_step_factor = exp_step_factor
+        # self.scale = scale
 
         # rays intersection parameters
         # t1, t2 need to be initialized to -1.0
@@ -209,7 +209,7 @@ class NGP_fw:
 
 
         # buffers that used for points sampling 
-        self.max_samples_per_rays = 1 if exp_step_factor==0 else 4
+        self.max_samples_per_rays = 1 if exp_step_factor==0. else 4
         self.max_samples_shape = self.N_rays * self.max_samples_per_rays
 
         self.xyzs = ti.Vector.field(3, dtype=data_type, shape=(self.max_samples_shape,))
@@ -252,8 +252,10 @@ class NGP_fw:
             self.hash_map_sizes[i] = params_in_level
             self.hash_map_indicator[i] = 1 if resolution ** 3 <= params_in_level else 0
             offset += params_in_level
-
-        assert offset == self.hash_embedding.shape[0]
+        offset *= 2
+        error_mesg = f"hash shape don't match offset: {offset}, hash shape: {self.hash_embedding.shape[0]}, final res: {resolution}"
+        assert offset == self.hash_embedding.shape[0], error_mesg
+        
 
     def get_direction(self):
         w, h = int(self.res[0]), int(self.res[1])
@@ -281,16 +283,16 @@ class NGP_fw:
         np_rgb = model['model.rgb_net.params'].astype(np_type)
         np_bitfield = model['model.density_bitfield']
         self.rgb_depth = model['model.rgb_depth']
-        self.cascades = model['model.cascades']
-        self.scale = model['model.box_scale']
+        self.cascades = model['model.cascade']
+        self.scale = float(model['model.box_scale'])
         self.xyz_min = -tf_vec3(self.scale)
         self.xyz_max = tf_vec3(self.scale)
         self.xyz_delta = self.xyz_max - self.xyz_min
         self.half_size = (self.xyz_max - self.xyz_min) / 2
-        self.exp_step_factor = 1/256 if self.scale > 0.5 else 0
-        self.min_samples = 1 if self.exp_step_factor==0 else 4
+        self.exp_step_factor = 1/256 if self.scale > 0.5 else 0.
+        self.min_samples = 1 if self.exp_step_factor==0. else 4
 
-        self.per_level_scales = model['model.per_level_scales']
+        self.per_level_scales = model['model.per_level_scale']
         self.layer1_base = np_sigma.shape[0]
         self.net_width = model['model.n_neurons']
         self.layer2_base = np_rgb.shape[0]
@@ -299,16 +301,16 @@ class NGP_fw:
         self.rgb_n_input = model['model.rgb_n_input']
         self.rgb_n_output =  model['model.rgb_n_output']
 
-        sigma_sm_per_weight = int(self.layer1_base / 128)
-        rgb_sm_per_weight = int(self.layer2_base / 128)
-        self.sigma_sm_preload = int(128/block_dim*sigma_sm_per_weight)
-        self.rgb_sm_preload = int(128/block_dim*rgb_sm_per_weight)
+        # sigma_sm_per_weight = int(self.layer1_base / 128)
+        # rgb_sm_per_weight = int(self.layer2_base / 128)
+        self.sigma_sm_preload = int(self.layer1_base/block_dim)
+        self.rgb_sm_preload = int(self.layer2_base/block_dim)
 
         self.hash_embedding= ti.field(dtype=data_type, shape=(np_hash.shape[0],))
         self.sigma_weights= ti.field(dtype=data_type, shape=(self.layer1_base,))
         self.rgb_weights= ti.field(dtype=data_type, shape=(self.layer2_base,))
         # density_bitfield is used for point sampling
-        self.density_bitfield = ti.field(ti.uint8, shape=(self.cascades*self.grid_size**3//8))
+        self.density_bitfield = ti.field(ti.uint8, shape=(self.cascades*(self.grid_size**3)//8))
 
         self.hash_embedding.from_numpy(np_hash)
         self.sigma_weights.from_numpy(np_sigma)
@@ -331,7 +333,7 @@ class NGP_fw:
 
     @staticmethod
     def taichi_init(kernel_profiler):
-        ti.init(arch=arch, offline_cache=True, kernel_profiler=kernel_profiler, enable_fallback=False)
+        ti.init(arch=arch, offline_cache=False, kernel_profiler=kernel_profiler, enable_fallback=False)
 
     @staticmethod
     def taichi_print_profiler():
@@ -422,6 +424,8 @@ class NGP_fw:
             r = self.alive_indices[n*2+c_index]
             grid_size3 = self.grid_size**3
             grid_size_inv = 1.0/self.grid_size
+            if r == -1:
+                print(r)
 
             ray_o = self.rays_o[r]
             ray_d = self.rays_d[r]
@@ -436,22 +440,23 @@ class NGP_fw:
 
             start_idx = n * N_samples
 
-            while (0<=t) & (t<t2) & (s<N_samples):
+            while (t<t2) & (s<N_samples):
                 # xyz = ray_o + t*ray_d
                 xyz = ray_o + t*ray_d
                 dt = calc_dt(t, self.exp_step_factor, self.grid_size, self.scale)
-                mip = ti.max(mip_from_pos(xyz, self.cascades),
-                             mip_from_dt(dt, self.grid_size, self.cascades))
+                # mip = ti.max(mip_from_pos(xyz, self.cascades),
+                #              mip_from_dt(dt, self.grid_size, self.cascades))
 
 
-                # mip_bound = 0.5
-                mip_bound = ti.min(ti.pow(2., mip-1), self.scale)
+                mip_bound = 0.5
+                
+                # mip_bound = ti.min(ti.pow(2., mip-1), self.scale)
                 mip_bound_inv = 1/mip_bound
 
                 nxyz = ti.math.clamp(0.5*(xyz*mip_bound_inv+1)*self.grid_size, 0.0, self.grid_size-1.0)
                 # nxyz = ti.ceil(nxyz)
 
-                idx =  mip*grid_size3 + __morton3D(ti.cast(nxyz, ti.u32))
+                idx = __morton3D(ti.cast(nxyz, ti.u32))
                 # occ = density_grid_taichi[idx] > 5.912066756501768
                 occ = self.density_bitfield[ti.u32(idx//8)] & (1 << ti.u32(idx%8))
 
@@ -489,7 +494,7 @@ class NGP_fw:
                 self.temp_hit[index] = i
 
         self.model_launch[None] += 1
-        self.padd_block_network[None] = ((self.model_launch[None]+ block_dim - 1)// block_dim) *block_dim
+        self.padd_block_network[None] = ((self.model_launch[None]+ block_dim - 1)// block_dim) * block_dim
         # self.padd_block_composite[None] = ((self.counter[None]+ 128 - 1)// 128) *128
 
     @ti.kernel
@@ -568,7 +573,7 @@ class NGP_fw:
 
             if sn < did_launch_num:
                 
-                for i in ti.static(range(self.sigma_n_input)):
+                for i in range(self.sigma_n_input):
                     input[i, tid] = self.xyzs_embedding[sn, i]
 
                 for i in range(self.net_width):
@@ -579,7 +584,7 @@ class NGP_fw:
                     hid1[i, tid] = temp
                 # ti.simt.block.sync()
                 
-                for i in ti.static(range(self.sigma_n_output)):
+                for i in range(self.sigma_n_output):
                     temp = init_val[0]
                     for j in ti.static(range(self.net_width)):
                         temp += data_type(ti.max(0.0, hid1[j, tid])) * weight[self.net_width*self.sigma_n_input+i*self.net_width+j]
@@ -609,6 +614,9 @@ class NGP_fw:
             ti.simt.block.sync()
 
             if sn < did_launch_num:
+
+                layer1 = self.net_width*self.rgb_n_input
+                layer2 = layer1+self.net_width*self.net_width
                 
                 dir_ = self.dirs[ray_id]
                 input = dir_encode_func(dir_)
@@ -616,46 +624,48 @@ class NGP_fw:
                 for i in ti.static(range(16)):
                     input[16+i] = self.final_embedding[sn, i]
 
-                for i in ti.static(range(self.net_width)):
+                for i in range(self.net_width):
                     temp = init_val[0]
                     for j in ti.static(range(self.rgb_n_input)):
                         temp += input[j] * weight[i*self.rgb_n_input+j]
 
                     hid1[i, tid] = temp
-                # ti.simt.block.sync()
+                ti.simt.block.sync()
 
-                if ti.static(self.rgb_depth == 2):
+                # if ti.static(self.rgb_depth == 2):
 
-                    for i in range(self.net_width):
-                        temp = init_val[0]
-                        for j in ti.static(range(self.net_width)):
-                            temp += data_type(ti.max(0.0, hid1[j, tid])) * weight[self.net_width*self.rgb_n_input+i*self.net_width+j]
+                for i in range(self.net_width):
+                    temp = init_val[0]
+                    for j in ti.static(range(self.net_width)):
+                        temp += data_type(ti.max(0.0, hid1[j, tid])) * weight[layer1+i*self.net_width+j]
 
-                        hid2[i, tid] = temp
-                    # ti.simt.block.sync()
+                    hid2[i, tid] = temp
+                ti.simt.block.sync()
 
-                    for i in ti.static(range(self.rgb_n_output)):
-                        temp = init_val[0]
-                        for j in ti.static(range(self.net_width)):
-                            temp += data_type(ti.max(0.0, hid2[j, tid])) * weight[self.net_width*self.rgb_n_input+self.net_width*self.net_width+i*self.net_width+j]
+                for i in range(self.rgb_n_output):
+                    temp = init_val[0]
+                    for j in ti.static(range(self.net_width)):
+                        temp += data_type(ti.max(0.0, hid2[j, tid])) * weight[layer2+i*self.net_width+j]
 
-                        hid1[i, tid] = temp
+                    hid1[i, tid] = temp
 
-                    for i in ti.static(range(self.rgb_n_output)):
-                        self.out_3[self.temp_hit[sn], i] = data_type(1 / (1 + ti.exp(-hid1[i, tid])))
-                else:
-                    for i in ti.static(range(self.rgb_n_output)):
-                        temp = init_val[0]
-                        for j in ti.static(range(self.net_width)):
-                            temp += data_type(ti.max(0.0, hid1[j, tid])) * weight[self.net_width*self.rgb_n_input+i*self.net_width+j]
+                ti.simt.block.sync()
 
-                        hid2[i, tid] = temp
-                    # ti.simt.block.sync()
+                for i in range(self.rgb_n_output):
+                    self.out_3[self.temp_hit[sn], i] = data_type(1 / (1 + ti.exp(-hid1[i, tid])))
+                # else:
+                #     for i in range(self.rgb_n_output):
+                #         temp = init_val[0]
+                #         for j in ti.static(range(self.net_width)):
+                #             temp += data_type(ti.max(0.0, hid1[j, tid])) * weight[self.net_width*self.rgb_n_input+i*self.net_width+j]
 
-                    for i in ti.static(range(self.rgb_n_output)):
-                        self.out_3[self.temp_hit[sn], i] = data_type(1 / (1 + ti.exp(-hid2[i, tid])))
+                #         hid2[i, tid] = temp
+                #     # ti.simt.block.sync()
+
+                #     for i in ti.static(range(self.rgb_n_output)):
+                #         self.out_3[self.temp_hit[sn], i] = data_type(1 / (1 + ti.exp(-hid2[i, tid])))
                         
-                    # ti.simt.block.sync()
+                ti.simt.block.sync()
 
 
     @ti.kernel
@@ -738,7 +748,7 @@ class NGP_fw:
             N_samples = max(min(self.N_rays//N_alive, 64), self.min_samples)
             samples += N_samples
             launch_model_total = N_alive * N_samples
-
+            print(f"samples: {samples}, N_alive: {N_alive}, N_samples: {N_samples}")
             self.raymarching_test_kernel(N_samples)
             self.rearange_index(launch_model_total)
             # self.dir_encode()
@@ -938,10 +948,10 @@ def main(args):
         grid_size=128, 
         base_res=16, 
         log2_T=19, 
-        # res=[res, res],
-        res=[1296, 840],
+        res=[res, res],
+        # res=[1296, 840],
         level=16, 
-        exp_step_factor=0
+        exp_step_factor=0,
     )
     if args.model_path:
         ngp.load_model(args.model_path)
@@ -972,7 +982,7 @@ if __name__ == '__main__':
     parser.add_argument('--res', type=int, default=800)
     parser.add_argument('--run_n', type=int, default=1)
     parser.add_argument('--scene', type=str, default='lego',
-                        choices=['ship', 'mic', 'materials', 'lego', 'hotdog', 'ficus', 'drums', 'chair'],)
+                        choices=['ship', 'mic', 'materials', 'lego', 'hotdog', 'ficus', 'drums', 'chair', 'garden'],)
     parser.add_argument('--model_path', type=str, default=None)
     parser.add_argument('--gui', action='store_true', default=False)
     parser.add_argument('--print_profile', action='store_true', default=False)
