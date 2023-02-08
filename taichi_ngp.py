@@ -20,8 +20,8 @@ def depth2img(depth):
 
     return depth_img
 
-arch = ti.cuda if ti._lib.core.with_cuda() else ti.vulkan
-# arch = ti.vulkan
+# arch = ti.cuda if ti._lib.core.with_cuda() else ti.vulkan
+arch = ti.vulkan
 
 if platform.system() == 'Darwin':
     block_dim = 64
@@ -113,15 +113,15 @@ def frexp_bit(x):
 def mip_from_pos(xyz, cascades):
     mx = ti.abs(xyz).max()
     # _, exponent = _frexp(mx)
-    exponent = frexp_bit(ti.f32(mx))
-    # frac, exponent = ti.frexp(ti.f32(mx))
+    # exponent = frexp_bit(ti.f32(mx))
+    frac, exponent = ti.frexp(ti.f32(mx))
     return ti.min(cascades-1, ti.max(0, exponent+1))
 
 @ti.func
 def mip_from_dt(dt, grid_size, cascades):
     # _, exponent = _frexp(dt*grid_size)
-    exponent = frexp_bit(ti.f32(dt*grid_size))
-    # frac, exponent = ti.frexp(ti.f32(dt*grid_size))
+    # exponent = frexp_bit(ti.f32(dt*grid_size))
+    frac, exponent = ti.frexp(ti.f32(dt*grid_size))
     return ti.min(cascades-1, ti.max(0, exponent))
 
 
@@ -462,18 +462,18 @@ class NGP_fw:
                 # xyz = ray_o + t*ray_d
                 xyz = ray_o + t*ray_d
                 dt = calc_dt(t, self.exp_step_factor, self.grid_size, self.scale)
-                # mip = ti.max(mip_from_pos(xyz, self.cascades),
-                #              mip_from_dt(dt, self.grid_size, self.cascades))
+                mip = ti.max(mip_from_pos(xyz, self.cascades),
+                             mip_from_dt(dt, self.grid_size, self.cascades))
 
-                # mip_bound = ti.min(ti.pow(2., mip-1), self.scale)
+                mip_bound = ti.min(ti.pow(2., mip-1), self.scale)
                 # mip = 0
-                mip_bound = 0.5
+                # mip_bound = 0.5
                 mip_bound_inv = 1/mip_bound
 
                 nxyz = ti.math.clamp(0.5*(xyz*mip_bound_inv+1)*self.grid_size, 0.0, self.grid_size-1.0)
                 # nxyz = ti.ceil(nxyz)
 
-                idx = __morton3D(ti.cast(nxyz, ti.u32))
+                idx = mip*self.grid_size3 + __morton3D(ti.cast(nxyz, ti.u32))
                 # occ = density_grid_taichi[idx] > 5.912066756501768
                 occ = self.density_bitfield[ti.u32(idx//8)] & (1 << ti.u32(idx%8))
 
@@ -951,16 +951,15 @@ class NGP_fw:
 
 def main(args):
     NGP_fw.taichi_init(args.print_profile)
-    res = args.res
     ngp = NGP_fw(  
         grid_size=128, 
         base_res=16, 
         log2_T=19, 
-        res=[res, res],
-        # res=[840, 1296],
+        # res=[res, res],
+        # 840, 1296 for real
+        res=[args.h, args.w],
         level=16, 
-        exp_step_factor=0,
-        # exp_step_factor=1/256,
+        exp_step_factor=0 if not args.real else 1/256,
     )
     if args.model_path:
         ngp.load_model(args.model_path)
@@ -988,12 +987,14 @@ def main(args):
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--res', type=int, default=800)
+    parser.add_argument('--w', type=int, default=800)
+    parser.add_argument('--h', type=int, default=800)
     parser.add_argument('--run_n', type=int, default=1)
     parser.add_argument('--scene', type=str, default='lego',
-                        choices=['ship', 'mic', 'materials', 'lego', 'hotdog', 'ficus', 'drums', 'chair', 'garden'],)
+                        choices=['ship', 'mic', 'materials', 'lego', 'hotdog', 'ficus', 'drums', 'chair'],)
     parser.add_argument('--model_path', type=str, default=None)
     parser.add_argument('--gui', action='store_true', default=False)
     parser.add_argument('--print_profile', action='store_true', default=False)
+    parser.add_argument('--real', action='store_true', default=False)
     args = parser.parse_args()
     main(args)
