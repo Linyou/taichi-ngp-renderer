@@ -781,7 +781,7 @@ class NGP_fw:
         plt.imsave('taichi_ngp.png', (rgb_np*255).astype(np.uint8))
         plt.imsave('taichi_ngp_depth.png', depth2img(depth_np))
 
-    def render(self, max_samples, T_threshold, use_dof=False, dist_to_focus=0.8, len_dis=0.0, clear_rgb=False) -> Tuple[float, int, int]:
+    def render(self, max_samples, T_threshold, use_dof=False, dist_to_focus=0.8, len_dis=0.0, clear_rgb=True) -> Tuple[float, int, int]:
         samples = 0
         if clear_rgb:
             self.rgb.fill(0.0)
@@ -978,6 +978,7 @@ class NGP_fw:
                 use_dof=use_dof,
                 dist_to_focus=dist_to_focus,
                 len_dis=len_dis,
+                clear_rgb=False
             )
 
             if not show_depth:
