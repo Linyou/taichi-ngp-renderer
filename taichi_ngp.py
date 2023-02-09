@@ -298,8 +298,8 @@ class NGP_fw:
             # ori_h = self.K[None][1, 2] * 2,
             scale = w / ori_w  
             # scale_h = h / ori_h
-            fx = self.K[None][0, 0]*scale
-            fy = self.K[None][1, 1]*scale
+            fx = self.cam_fov_scale[None]*self.K[None][0, 0]*scale
+            fy = self.cam_fov_scale[None]*self.K[None][1, 1]*scale
             cx, cy = 0.5*w, 0.5*h
 
             uni_dir = ti.Matrix([[(i+0.5-cx)/fx, (j+0.5-cy)/fy, 1.]], dt=data_type)
@@ -320,7 +320,9 @@ class NGP_fw:
         self.xyz_min = -tf_vec3(self.scale)
         self.xyz_max = tf_vec3(self.scale)
         self.xyz_delta = self.xyz_max - self.xyz_min
-        self.half_size = (self.xyz_max - self.xyz_min) / 2
+        # self.half_size = self.xyz_delta / 2
+        self.half_size = ti.Vector.field(3, dtype=ti.f32, shape=())
+        self.half_size[None] = self.xyz_delta / 2
         self.exp_step_factor = 1/256 if self.scale > 0.5 else 0.
         self.min_samples = 1 if self.exp_step_factor==0. else 4
 
@@ -358,6 +360,8 @@ class NGP_fw:
         self.directions = ti.Matrix.field(n=1, m=3, dtype=data_type, shape=(self.N_rays,))
         self.pose = ti.Matrix.field(n=3, m=4, dtype=data_type, shape=())
         self.K = ti.Matrix.field(n=3, m=3, dtype=data_type, shape=())
+        self.cam_fov_scale = ti.field(dtype=data_type, shape=())
+        self.cam_fov_scale[None] = 1.0
 
         self.K.from_numpy(model['K'].astype(np_type))
         self.pose.from_numpy(model['poses'][20].astype(np_type))
@@ -372,6 +376,7 @@ class NGP_fw:
         print(self.K)
         print('pose: ')
         print(self.pose)
+        print("half size: ", self.half_size[None])
         print('rgb_depth: ', self.rgb_depth)
         print('cascades: ', self.cascades)
         print('scale: ', self.scale)
@@ -409,11 +414,13 @@ class NGP_fw:
             self.alive_indices[i*2+j] = i    
 
     @ti.func
-    def _ray_aabb_intersec(self, ray_o, ray_d):
+    def _ray_aabb_intersec(self, ray_o, ray_d, half_size):
         inv_d = 1.0 / ray_d
 
-        t_min = (self.center-self.half_size-ray_o)*inv_d
-        t_max = (self.center+self.half_size-ray_o)*inv_d
+        # half_size = tf_vec3(self.half_size[None])
+
+        t_min = (self.center-half_size-ray_o)*inv_d
+        t_max = (self.center+half_size-ray_o)*inv_d
 
         _t1 = ti.min(t_min, t_max)
         _t2 = ti.max(t_min, t_max)
@@ -449,7 +456,7 @@ class NGP_fw:
             ray_d = tf_vec3(mat_result[0, 0], mat_result[0, 1],mat_result[0, 2])
             ray_o = c2w[:, 3] + tf_vec3(offset_w[0, 0], offset_w[0, 1],offset_w[0, 2])
             
-            t1t2 = self._ray_aabb_intersec(ray_o, ray_d)
+            t1t2 = self._ray_aabb_intersec(ray_o, ray_d, self.half_size[None])
 
             if t1t2[1] > 0.0:
                 self.hits_t[i][0] = data_type(ti.max(t1t2[0], NEAR_DISTANCE))
@@ -467,7 +474,7 @@ class NGP_fw:
             ray_d = tf_vec3(mat_result[0, 0], mat_result[0, 1],mat_result[0, 2])
             ray_o = c2w[:, 3]
             
-            t1t2 = self._ray_aabb_intersec(ray_o, ray_d)
+            t1t2 = self._ray_aabb_intersec(ray_o, ray_d, self.half_size[None])
 
             if t1t2[1] > 0.0:
                 self.hits_t[i][0] = data_type(ti.max(t1t2[0], NEAR_DISTANCE))
@@ -883,6 +890,12 @@ class NGP_fw:
         last_dist_to_focus = dist_to_focus
         last_len_dis = len_dis
 
+        box_size = self.half_size[None][0]
+        last_box_size = box_size
+
+        cam_fov_scale = 1.0
+        last_cam_fov_scale = cam_fov_scale
+
         while window.running:
             # TODO: make it more efficient
             pose = self.pose.to_numpy()
@@ -931,10 +944,24 @@ class NGP_fw:
 
             with gui.sub_window("Options", 0.05, 0.05, 0.68, 0.3) as w:
                 w.text(f'General')
+                box_size = w.slider_float('box size', box_size, 0.1, 64.0)
+                cam_fov_scale = w.slider_float('camera fov', cam_fov_scale, 0.01, 2.0)
                 T_threshold = w.slider_float('transparency threshold', T_threshold, 0., 1.)
                 max_samples_for_rendering = w.slider_float("max samples", max_samples_for_rendering, 1, 100)
                 show_depth = w.checkbox("show depth", show_depth)
                 # white_bg = w.checkbox("white background", white_bg)
+                if last_box_size != box_size:
+                    last_box_size = box_size
+                    self.half_size[None] = vec3(box_size)
+                    self.rgb.fill(0.0)
+                    total_frame = 1
+
+                if last_cam_fov_scale != cam_fov_scale:
+                    last_cam_fov_scale = cam_fov_scale
+                    self.cam_fov_scale[None] = cam_fov_scale
+                    self.init_direction(self.res[1], self.res[0])
+                    self.rgb.fill(0.0)
+                    total_frame = 1
 
                 w.text(f'Camera')
                 use_dof = w.checkbox("apply depth of field", use_dof)
