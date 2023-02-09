@@ -114,7 +114,7 @@ You can train a new scene with [ngp_pl](https://github.com/kwea123/ngp_pl) and s
 ## Todo
 
 - [x] Support Vulkan backend
+- [x] Support real scenes
 - [ ] Refactor to separate modules
-- [ ] Support real scenes
 
 ...
