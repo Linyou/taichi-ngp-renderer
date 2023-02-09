@@ -113,15 +113,15 @@ def frexp_bit(x):
 def mip_from_pos(xyz, cascades):
     mx = ti.abs(xyz).max()
     # _, exponent = _frexp(mx)
-    # exponent = frexp_bit(ti.f32(mx))
-    frac, exponent = ti.frexp(ti.f32(mx))
+    exponent = frexp_bit(ti.f32(mx))
+    # frac, exponent = ti.frexp(ti.f32(mx))
     return ti.min(cascades-1, ti.max(0, exponent+1))
 
 @ti.func
 def mip_from_dt(dt, grid_size, cascades):
     # _, exponent = _frexp(dt*grid_size)
-    # exponent = frexp_bit(ti.f32(dt*grid_size))
-    frac, exponent = ti.frexp(ti.f32(dt*grid_size))
+    exponent = frexp_bit(ti.f32(dt*grid_size))
+    # frac, exponent = ti.frexp(ti.f32(dt*grid_size))
     return ti.min(cascades-1, ti.max(0, exponent))
 
 
