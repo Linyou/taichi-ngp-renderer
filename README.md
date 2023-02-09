@@ -2,8 +2,10 @@
 
 [![License](https://img.shields.io/badge/license-Apache-green.svg)](LICENSE)
 
-##### Update 2022-10-27: Support all platforms, Windows and Linux (CUDA, Vulkan), MacOS (Vulkan)
-##### Update 2022-10-23: Support depth of field (DoF)
+##### Update 2023-02-09: Support real scenes! Try with `python taichi_ngp.py --gui --scene garden`
+
+<!-- ##### Update 2022-10-27: Support all platforms, Windows and Linux (CUDA, Vulkan), MacOS (Vulkan)
+##### Update 2022-10-23: Support depth of field (DoF) -->
 
 This is a [Instant-NGP](https://github.com/NVlabs/instant-ngp) renderer implemented using [Taichi](https://github.com/taichi-dev/taichi), written entirely in Python. **No CUDA!** This repository only implemented the rendering part of the NGP but is more simple and has a lesser amount of code compared to the original (Instant-NGP and [tiny-cuda-nn](https://github.com/NVlabs/tiny-cuda-nn)).
 
