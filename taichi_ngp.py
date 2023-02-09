@@ -294,7 +294,7 @@ class NGP_fw:
     @ti.kernel
     def init_direction(self, w: ti.i32, h: ti.i32):
         for i, j in ti.ndrange(w, h):
-            ori_w = self.K[None][0, 2] * 2,
+            ori_w = 2*self.K[None][0, 2]
             # ori_h = self.K[None][1, 2] * 2,
             scale = w / ori_w  
             # scale_h = h / ori_h
@@ -302,9 +302,7 @@ class NGP_fw:
             fy = self.K[None][1, 1]*scale
             cx, cy = 0.5*w, 0.5*h
 
-            x, y = i+0.5, j+0.5
-
-            uni_dir = ti.Matrix([[(x-cx)/fx, (y-cy)/fy, 1.],], data_type)
+            uni_dir = ti.Matrix([[(i+0.5-cx)/fx, (j+0.5-cy)/fy, 1.]], dt=data_type)
             self.directions[j*w+i] = uni_dir
 
     def load_model(self, model_path):
@@ -394,8 +392,8 @@ class NGP_fw:
         ti.init(
             arch=arch, 
             offline_cache=True,
-             kernel_profiler=kernel_profiler, 
-             enable_fallback=False, 
+            kernel_profiler=kernel_profiler, 
+            enable_fallback=False, 
         )
 
     @staticmethod
