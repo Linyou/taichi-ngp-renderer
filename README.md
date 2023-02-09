@@ -3,6 +3,10 @@
 [![License](https://img.shields.io/badge/license-Apache-green.svg)](LICENSE)
 
 ##### Update 2023-02-09: Support real scenes! Try with `python taichi_ngp.py --gui --scene garden`
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Linyou/taichi-ngp-renderer/main/assets/garden.png", width="50%">
+  <br>
+</p>
 
 <!-- ##### Update 2022-10-27: Support all platforms, Windows and Linux (CUDA, Vulkan), MacOS (Vulkan)
 ##### Update 2022-10-23: Support depth of field (DoF) -->

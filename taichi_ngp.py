@@ -20,8 +20,8 @@ def depth2img(depth):
 
     return depth_img
 
-# arch = ti.cuda if ti._lib.core.with_cuda() else ti.vulkan
-arch = ti.vulkan
+arch = ti.cuda if ti._lib.core.with_cuda() else ti.vulkan
+# arch = ti.vulkan
 
 if platform.system() == 'Darwin':
     block_dim = 64
@@ -44,7 +44,7 @@ NEAR_DISTANCE = 0.01
 SQRT3 = 1.7320508075688772
 SQRT3_MAX_SAMPLES = SQRT3/1024
 SQRT3_2 = 1.7320508075688772*2
-PRETRAINED_MODEL_URL = 'https://github.com/Linyou/taichi-ngp-renderer/releases/download/v0.2-models/{}.npy'
+PRETRAINED_MODEL_URL = 'https://github.com/Linyou/taichi-ngp-renderer/releases/download/v0.2/{}.npy'
 
 #<----------------- hash table util code ----------------->
 @ti.func
@@ -990,12 +990,11 @@ class NGP_fw:
             canvas.set_image(self.render_buffer)
             window.show()
 
-
 def main(args):
     NGP_fw.taichi_init(args.print_profile)
     real = args.real
     res = [args.h, args.w]
-    if args.scene == 'garden':
+    if args.scene in ['garden', 'bonsai', 'counter', 'garden', 'kitchen']:
         real = True
         res = [840, 1296]
         
