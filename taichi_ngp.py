@@ -253,7 +253,12 @@ class NGP_fw:
         self.lookup = np.array([0.0, -1.0, 0.0])
 
     def hash_table_init(self):
-        print(f'GridEncoding: base resolution: {self.base_res}, log scale per level:{self.per_level_scales:.5f} feature numbers per level: {2} maximum parameters per level: {self.max_params} level: {self.level}')
+        print('----GridEncoding----')
+        print(f'base_resolution: {self.base_res}') 
+        print(f'log_scale:{self.per_level_scales:.5f}') 
+        print(f'feature_per_level: {2} logT: {self.max_params}')
+        print(f'level: {self.level}')
+
         offset = 0
         for i in range(self.level):
             resolution = int(np.ceil(self.base_res * np.exp(i*np.log(self.per_level_scales)) - 1.0)) + 1
@@ -273,6 +278,7 @@ class NGP_fw:
         w, h = int(self.res[1]), int(self.res[0])
         fx = self.K[None][0, 0]
         fy = self.K[None][1, 1]
+
         cx, cy = 0.5*w, 0.5*h
 
         x, y = np.meshgrid(
@@ -284,6 +290,22 @@ class NGP_fw:
         directions = np.stack([(x-cx)/fx, (y-cy)/fy, np.ones_like(x)], -1)
 
         return directions.reshape(-1, 3)
+
+    @ti.kernel
+    def init_direction(self, w: ti.i32, h: ti.i32):
+        for i, j in ti.ndrange(w, h):
+            ori_w = self.K[None][0, 2] * 2,
+            # ori_h = self.K[None][1, 2] * 2,
+            scale = w / ori_w  
+            # scale_h = h / ori_h
+            fx = self.K[None][0, 0]*scale
+            fy = self.K[None][1, 1]*scale
+            cx, cy = 0.5*w, 0.5*h
+
+            x, y = i+0.5, j+0.5
+
+            uni_dir = ti.Matrix([[(x-cx)/fx, (y-cy)/fy, 1.],], data_type)
+            self.directions[j*w+i] = uni_dir
 
     def load_model(self, model_path):
         print('Loading model from {}'.format(model_path))
@@ -344,8 +366,28 @@ class NGP_fw:
         # if self.res[0] != 800 or self.res[1] != 800:
         #     directions = self.get_direction(model['camera_angle_x'])[:, None, :].astype(np_type)
         # else:
-        directions = model['directions'][:, None, :].astype(np_type)
-        self.directions.from_numpy(directions)
+        # directions = model['directions'][:, None, :].astype(np_type)
+        # self.directions.from_numpy(directions)
+        self.init_direction(self.res[1], self.res[0])
+        print('----model loaded----')
+        print('K: ')
+        print(self.K)
+        print('pose: ')
+        print(self.pose)
+        print('rgb_depth: ', self.rgb_depth)
+        print('cascades: ', self.cascades)
+        print('scale: ', self.scale)
+        print('per_level_scales: ', self.per_level_scales)
+        print('net_width: ', self.net_width)
+        print('sigma_n_input: ', self.sigma_n_input)
+        print('sigma_n_output: ', self.sigma_n_output)
+        print('rgb_n_input: ', self.rgb_n_input)
+        print('rgb_n_output: ', self.rgb_n_output)
+        print('sigma_model_size: ', self.sigma_model_size)
+        print('rgb_model_size: ', self.rgb_model_size)
+        print('sigma_sm_preload: ', self.sigma_sm_preload)
+        print('rgb_sm_preload: ', self.rgb_sm_preload)
+
 
     @staticmethod
     def taichi_init(kernel_profiler):
@@ -579,25 +621,24 @@ class NGP_fw:
             tid = sn % block_dim
             did_launch_num = self.model_launch[None]
             init_val = tf_vec1(0.0)
-            # input = ti.simt.block.SharedArray((self.sigma_n_input, block_dim), data_type)
+            input_val = ti.simt.block.SharedArray((self.sigma_n_input, block_dim), data_type)
             weight = ti.simt.block.SharedArray((self.sigma_model_size,), data_type)
             hid1 = ti.simt.block.SharedArray((self.net_width, block_dim), data_type)
             hid2 = ti.simt.block.SharedArray((self.net_width, block_dim), data_type)
             for i in ti.static(range(self.sigma_sm_preload)):
                 k = tid*self.sigma_sm_preload+i
                 weight[k] = self.sigma_weights[k]
+            for i in ti.static(range(self.sigma_n_input)):
+                input_val[i, tid] = self.xyzs_embedding[sn, i]
             ti.simt.block.sync()
 
             if sn < did_launch_num:
-                input_val = tf_vec32(0.0)
-                
-                for i in ti.static(range(self.sigma_n_input)):
-                    input_val[i] = self.xyzs_embedding[sn, i]
-
+                # input_val = tf_vec32(0.0)
+            
                 for i in range(self.net_width):
                     temp = init_val[0]
                     for j in ti.static(range(self.sigma_n_input)):
-                        temp += input_val[j] * weight[i*self.sigma_n_input+j]
+                        temp += input_val[j, tid] * weight[i*self.sigma_n_input+j]
 
                     hid1[i, tid] = temp
                 # ti.simt.block.sync()
@@ -951,15 +992,21 @@ class NGP_fw:
 
 def main(args):
     NGP_fw.taichi_init(args.print_profile)
+    real = args.real
+    res = [args.h, args.w]
+    if args.scene == 'garden':
+        real = True
+        res = [840, 1296]
+        
     ngp = NGP_fw(  
         grid_size=128, 
         base_res=16, 
         log2_T=19, 
         # res=[res, res],
         # 840, 1296 for real
-        res=[args.h, args.w],
+        res=res,
         level=16, 
-        exp_step_factor=0 if not args.real else 1/256,
+        exp_step_factor=0 if not real else 1/256,
     )
     if args.model_path:
         ngp.load_model(args.model_path)
@@ -991,7 +1038,7 @@ if __name__ == '__main__':
     parser.add_argument('--h', type=int, default=800)
     parser.add_argument('--run_n', type=int, default=1)
     parser.add_argument('--scene', type=str, default='lego',
-                        choices=['ship', 'mic', 'materials', 'lego', 'hotdog', 'ficus', 'drums', 'chair'],)
+                        choices=['ship', 'mic', 'materials', 'lego', 'hotdog', 'ficus', 'drums', 'chair', 'garden'],)
     parser.add_argument('--model_path', type=str, default=None)
     parser.add_argument('--gui', action='store_true', default=False)
     parser.add_argument('--print_profile', action='store_true', default=False)
