@@ -992,7 +992,7 @@ def main(args):
     NGP_fw.taichi_init(args.print_profile)
     real = args.real
     res = [args.h, args.w]
-    if args.scene in ['garden', 'bonsai', 'counter', 'garden', 'kitchen']:
+    if args.scene in ['garden', 'bonsai', 'counter', 'garden', 'kitchen', 'bicycle'] and not args.real:
         real = True
         res = [840, 1296]
         
@@ -1040,7 +1040,7 @@ if __name__ == '__main__':
                             # synthetic scenes
                             'ship', 'mic', 'materials', 'lego', 'hotdog', 'ficus', 'drums', 'chair',
                             # real scenes
-                            'garden', 'bonsai', 'counter', 'garden', 'kitchen'
+                            'garden', 'bonsai', 'counter', 'garden', 'kitchen', 'bicycle'
                         ],)
     parser.add_argument('--model_path', type=str, default=None)
     parser.add_argument('--gui', action='store_true', default=False)
