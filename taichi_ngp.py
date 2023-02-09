@@ -44,7 +44,7 @@ NEAR_DISTANCE = 0.01
 SQRT3 = 1.7320508075688772
 SQRT3_MAX_SAMPLES = SQRT3/1024
 SQRT3_2 = 1.7320508075688772*2
-PRETRAINED_MODEL_URL = 'https://github.com/Linyou/taichi-ngp-renderer/releases/download/v0.1-models/{}.npy'
+PRETRAINED_MODEL_URL = 'https://github.com/Linyou/taichi-ngp-renderer/releases/download/v0.2-models/{}.npy'
 
 #<----------------- hash table util code ----------------->
 @ti.func
