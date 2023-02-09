@@ -1038,7 +1038,12 @@ if __name__ == '__main__':
     parser.add_argument('--h', type=int, default=800)
     parser.add_argument('--run_n', type=int, default=1)
     parser.add_argument('--scene', type=str, default='lego',
-                        choices=['ship', 'mic', 'materials', 'lego', 'hotdog', 'ficus', 'drums', 'chair', 'garden'],)
+                        choices=[
+                            # synthetic scenes
+                            'ship', 'mic', 'materials', 'lego', 'hotdog', 'ficus', 'drums', 'chair',
+                            # real scenes
+                            'garden', 'bonsai', 'counter', 'garden', 'kitchen'
+                        ],)
     parser.add_argument('--model_path', type=str, default=None)
     parser.add_argument('--gui', action='store_true', default=False)
     parser.add_argument('--print_profile', action='store_true', default=False)
