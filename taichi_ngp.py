@@ -179,7 +179,8 @@ class NGP_fw:
         # t1, t2 need to be initialized to -1.0
         self.hits_t = ti.Vector.field(n=2, dtype=data_type, shape=(self.N_rays))
         self.hits_t.fill(-1.0)
-        self.center = tf_vec3(0.0, 0.0, 0.0)
+        # self.center = tf_vec3(0.0, 0.0, 0.0)
+        self.center = ti.Vector.field(n=3, dtype=ti.f32, shape=())
         # self.xyz_min = -tf_vec3(scale, scale, scale)
         # self.xyz_max = tf_vec3(scale, scale, scale)
         # self.half_size = (self.xyz_max - self.xyz_min) / 2
@@ -215,9 +216,12 @@ class NGP_fw:
         self.max_params = 2**log2_T
         self.level = level
         # hash table fields
-        self.offsets = ti.field(ti.i32, shape=(16,))
-        self.hash_map_sizes = ti.field(ti.uint32, shape=(16,))
-        self.hash_map_indicator = ti.field(ti.i32, shape=(16,))
+        # self.offsets = ti.field(ti.i32, shape=(16,))
+        # self.hash_map_sizes = ti.field(ti.uint32, shape=(16,))
+        # self.hash_map_indicator = ti.field(ti.i32, shape=(16,))
+        self.offsets = ti.types.vector(16, dtype=ti.i32)(0)
+        self.hash_map_sizes = ti.types.vector(16, dtype=ti.uint32)(0)
+        self.hash_map_indicator = ti.types.vector(16, dtype=ti.i32)(0)
 
 
         # buffers that used for points sampling 
@@ -414,13 +418,13 @@ class NGP_fw:
             self.alive_indices[i*2+j] = i    
 
     @ti.func
-    def _ray_aabb_intersec(self, ray_o, ray_d, half_size):
+    def _ray_aabb_intersec(self, ray_o, ray_d):
         inv_d = 1.0 / ray_d
 
         # half_size = tf_vec3(self.half_size[None])
 
-        t_min = (self.center-half_size-ray_o)*inv_d
-        t_max = (self.center+half_size-ray_o)*inv_d
+        t_min = (self.center[None]-self.half_size[None]-ray_o)*inv_d
+        t_max = (self.center[None]+self.half_size[None]-ray_o)*inv_d
 
         _t1 = ti.min(t_min, t_max)
         _t2 = ti.max(t_min, t_max)
@@ -456,7 +460,7 @@ class NGP_fw:
             ray_d = tf_vec3(mat_result[0, 0], mat_result[0, 1],mat_result[0, 2])
             ray_o = c2w[:, 3] + tf_vec3(offset_w[0, 0], offset_w[0, 1],offset_w[0, 2])
             
-            t1t2 = self._ray_aabb_intersec(ray_o, ray_d, self.half_size[None])
+            t1t2 = self._ray_aabb_intersec(ray_o, ray_d)
 
             if t1t2[1] > 0.0:
                 self.hits_t[i][0] = data_type(ti.max(t1t2[0], NEAR_DISTANCE))
@@ -474,7 +478,7 @@ class NGP_fw:
             ray_d = tf_vec3(mat_result[0, 0], mat_result[0, 1],mat_result[0, 2])
             ray_o = c2w[:, 3]
             
-            t1t2 = self._ray_aabb_intersec(ray_o, ray_d, self.half_size[None])
+            t1t2 = self._ray_aabb_intersec(ray_o, ray_d)
 
             if t1t2[1] > 0.0:
                 self.hits_t[i][0] = data_type(ti.max(t1t2[0], NEAR_DISTANCE))
@@ -564,60 +568,64 @@ class NGP_fw:
     @ti.kernel
     def hash_encode(self):
         # get hash table embedding
-        ti.loop_config(block_dim=16)
-        for sn, level in ti.ndrange(self.model_launch[None], 16):
-            # normalize to [0, 1], before is [-0.5, 0.5]
-            # xyz = self.xyzs[self.temp_hit[sn]] + 0.5
-            xyz = (self.xyzs[self.temp_hit[sn]] - self.xyz_min) / (self.xyz_delta)
-            offset = self.offsets[level] * 2
-            indicator = self.hash_map_indicator[level]
-            map_size = self.hash_map_sizes[level]
+        # ti.loop_config(block_dim=16)
+        for sn in ti.ndrange(self.model_launch[None]):
+            for level in ti.static(range(16)):
+                # normalize to [0, 1], before is [-0.5, 0.5]
+                # xyz = self.xyzs[self.temp_hit[sn]] + 0.5
+                xyz = (self.xyzs[self.temp_hit[sn]] - self.xyz_min) / (self.xyz_delta)
+                offset = self.offsets[level] * 2
+                indicator = self.hash_map_indicator[level]
+                map_size = self.hash_map_sizes[level]
 
-            init_val0 = tf_vec1(0.0)
-            init_val1 = tf_vec1(1.0)
-            local_feature_0 = init_val0[0]
-            local_feature_1 = init_val0[0]
+                init_val0 = tf_vec1(0.0)
+                init_val1 = tf_vec1(1.0)
+                local_feature_0 = init_val0[0]
+                local_feature_1 = init_val0[0]
 
-            index_temp = tf_index_temp(0)
-            w_temp = tf_vec8(0.0)
-            hash_temp_1 = tf_vec8(0.0)
-            hash_temp_2 = tf_vec8(0.0)
+                index_temp = tf_index_temp(0)
+                w_temp = tf_vec8(0.0)
+                hash_temp_1 = tf_vec8(0.0)
+                hash_temp_2 = tf_vec8(0.0)
 
-            scale = self.base_res * ti.exp(level*ti.log(self.per_level_scales)) - 1.0
-            resolution = ti.cast(ti.ceil(scale), ti.uint32) + 1
+                scale = self.base_res * ti.exp(level*ti.log(self.per_level_scales)) - 1.0
+                resolution = ti.cast(ti.ceil(scale), ti.uint32) + 1
 
-            pos = xyz * scale + 0.5
-            pos_grid_uint = ti.cast(ti.floor(pos), ti.uint32)
-            pos -= pos_grid_uint
-            # pos_grid_uint = ti.cast(pos_grid, ti.uint32)
+                pos = xyz * scale + 0.5
+                pos_grid_uint = ti.cast(ti.floor(pos), ti.uint32)
+                pos -= pos_grid_uint
+                # pos_grid_uint = ti.cast(pos_grid, ti.uint32)
 
-            for idx in ti.static(range(8)):
-                # idx_uint = ti.cast(idx, ti.uint32)
-                w = init_val1[0]
-                pos_grid_local = uvec3(0)
+                for idx in ti.static(range(8)):
+                    # idx_uint = ti.cast(idx, ti.uint32)
+                    w = init_val1[0]
+                    pos_grid_local = uvec3(0)
 
-                for d in ti.static(range(3)):
-                    if (idx & (1 << d)) == 0:
-                        pos_grid_local[d] = pos_grid_uint[d]
-                        w *= data_type(1 - pos[d])
-                    else:
-                        pos_grid_local[d] = pos_grid_uint[d] + 1
-                        w *= data_type(pos[d])
+                    for d in ti.static(range(3)):
+                        if (idx & (1 << d)) == 0:
+                            pos_grid_local[d] = pos_grid_uint[d]
+                            w *= data_type(1 - pos[d])
+                        else:
+                            pos_grid_local[d] = pos_grid_uint[d] + 1
+                            w *= data_type(pos[d])
 
-                index = ti.int32(grid_pos2hash_index(indicator, pos_grid_local, resolution, map_size))
-                index_temp[idx] = offset+index*2
-                w_temp[idx] = w
+                    index = ti.int32(grid_pos2hash_index(indicator, pos_grid_local, resolution, map_size))
+                    index_temp[idx] = offset+index*2
+                    w_temp[idx] = w
 
-            for idx in ti.static(range(8)):
-                hash_temp_1[idx] = self.hash_embedding[index_temp[idx]]
-                hash_temp_2[idx] = self.hash_embedding[index_temp[idx]+1]
+                    # local_feature_0 += data_type(w * self.hash_embedding[offset+index*2])
+                    # local_feature_1 += data_type(w * self.hash_embedding[offset+index*2+1])
 
-            for idx in ti.static(range(8)):
-                local_feature_0 += data_type(w_temp[idx] * hash_temp_1[idx])
-                local_feature_1 += data_type(w_temp[idx] * hash_temp_2[idx])
+                for idx in ti.static(range(8)):
+                    hash_temp_1[idx] = self.hash_embedding[index_temp[idx]]
+                    hash_temp_2[idx] = self.hash_embedding[index_temp[idx]+1]
 
-            self.xyzs_embedding[sn, level*2] = local_feature_0
-            self.xyzs_embedding[sn, level*2+1] = local_feature_1
+                for idx in ti.static(range(8)):
+                    local_feature_0 += data_type(w_temp[idx] * hash_temp_1[idx])
+                    local_feature_1 += data_type(w_temp[idx] * hash_temp_2[idx])
+
+                self.xyzs_embedding[sn, level*2] = local_feature_0
+                self.xyzs_embedding[sn, level*2+1] = local_feature_1
 
     @ti.kernel
     def sigma_layer(self):
@@ -890,8 +898,19 @@ class NGP_fw:
         last_dist_to_focus = dist_to_focus
         last_len_dis = len_dis
 
-        box_size = self.half_size[None][0]
-        last_box_size = box_size
+        box_size_x = self.half_size[None][0]
+        box_size_y = self.half_size[None][1]
+        box_size_z = self.half_size[None][2]
+        last_box_size_x = box_size_x
+        last_box_size_y = box_size_y
+        last_box_size_z = box_size_z
+
+        center_x = self.center[None][0]
+        center_y = self.center[None][1]
+        center_z = self.center[None][2]
+        last_center_x = center_x
+        last_center_y = center_y
+        last_center_z = center_z
 
         cam_fov_scale = 1.0
         last_cam_fov_scale = cam_fov_scale
@@ -944,15 +963,30 @@ class NGP_fw:
 
             with gui.sub_window("Options", 0.05, 0.05, 0.68, 0.3) as w:
                 w.text(f'General')
-                box_size = w.slider_float('box size', box_size, 0.1, 64.0)
+                box_size_x = w.slider_float('box size_x', box_size_x, 0.01, 64.0)
+                box_size_y = w.slider_float('box size_y', box_size_y, 0.01, 64.0)
+                box_size_z = w.slider_float('box size_z', box_size_z, 0.01, 64.0)
+                center_x = w.slider_float('center_x', center_x, -64.0, 64.0)
+                center_y = w.slider_float('center_y', center_y, -64.0, 64.0)
+                center_z = w.slider_float('center_z', center_z, -64.0, 64.0)
                 cam_fov_scale = w.slider_float('camera fov', cam_fov_scale, 0.01, 2.0)
                 T_threshold = w.slider_float('transparency threshold', T_threshold, 0., 1.)
                 max_samples_for_rendering = w.slider_float("max samples", max_samples_for_rendering, 1, 100)
                 show_depth = w.checkbox("show depth", show_depth)
                 # white_bg = w.checkbox("white background", white_bg)
-                if last_box_size != box_size:
-                    last_box_size = box_size
-                    self.half_size[None] = vec3(box_size)
+                if last_box_size_x != box_size_x or last_box_size_y != box_size_y or last_box_size_z != box_size_z:
+                    last_box_size_x = box_size_x
+                    last_box_size_y = box_size_y
+                    last_box_size_z = box_size_z
+                    self.half_size[None] = vec3(box_size_x, box_size_y, box_size_z)
+                    self.rgb.fill(0.0)
+                    total_frame = 1
+                
+                if last_center_x != center_x or last_center_y != center_y or last_center_z != center_z:
+                    last_center_x = center_x
+                    last_center_y = center_y
+                    last_center_z = center_z
+                    self.center[None] = vec3(center_x, center_y, center_z)
                     self.rgb.fill(0.0)
                     total_frame = 1
 
