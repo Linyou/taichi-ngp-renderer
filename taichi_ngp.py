@@ -647,7 +647,7 @@ class NGP_fw:
             for i in ti.static(range(self.sigma_sm_preload)):
                 k = tid*self.sigma_sm_preload+i
                 weight[k] = self.sigma_weights[k]
-            for i in ti.static(range(8)):
+            for i in ti.static(range(self.sigma_n_input)):
                 input_val[i, tid] = self.xyzs_embedding[sn, i]
             ti.simt.block.sync()
 
@@ -657,7 +657,7 @@ class NGP_fw:
                 for i in range(self.net_width):
                     temp = init_val[0]
                     for j in ti.static(range(self.sigma_n_input)):
-                        temp += input_val[j, tid] * weight[i*16+j]
+                        temp += input_val[j, tid] * weight[i*self.sigma_n_input+j]
 
                     hid1[i, tid] = temp
                 # ti.simt.block.sync()
@@ -737,65 +737,6 @@ class NGP_fw:
                         self.out_3[self.temp_hit[sn], i] = data_type(1 / (1 + ti.exp(-hid2[i, tid])))
                         
                 # ti.simt.block.sync()
-
-    @ti.kernel
-    def sigma_rgb_layer(self):
-        ti.loop_config(block_dim=block_dim)  # DO NOT REMOVE
-        for sn in ti.ndrange(self.padd_block_network[None]):
-            ray_id = self.temp_hit[sn]
-            tid = sn % block_dim
-            did_launch_num = self.model_launch[None]
-            init_val = tf_vec1(0.0)
-            sigma_weight = ti.simt.block.SharedArray((16 * 32 + 16 * 16, ),
-                                                    data_type)
-            rgb_weight = ti.simt.block.SharedArray((16 * 32 + 16 * 16, ),
-                                                data_type)
-
-            for i in ti.static(range(self.sigma_sm_preload)):
-                k = tid * self.sigma_sm_preload + i
-                sigma_weight[k] = self.sigma_weights[k]
-            for i in ti.static(range(self.rgb_sm_preload)):
-                k = tid * self.rgb_sm_preload + i
-                rgb_weight[k] = self.rgb_weights[k]
-            ti.simt.block.sync()
-
-            if sn < did_launch_num:
-
-                s0 = init_val[0]
-                s1 = init_val[0]
-                s2 = init_val[0]
-
-                dir_ = self.dirs[ray_id]
-                rgb_input_val = dir_encode_func(dir_)
-                sigma_output_val = tf_vec16(0.)
-
-                for i in range(16):
-                    temp = init_val[0]
-                    for j in ti.static(range(32)):
-                        temp += self.xyzs_embedding[sn, j] * sigma_weight[i * 32 + j]
-
-                    for j in ti.static(range(16)):
-                        sigma_output_val[j] += data_type(ti.max(
-                            0.0, temp)) * sigma_weight[16 * 32 + j * 16 + i]
-
-                for i in ti.static(range(16)):
-                    rgb_input_val[16 + i] = sigma_output_val[i]
-
-                for i in range(16):
-                    temp = init_val[0]
-                    for j in ti.static(range(32)):
-                        temp += rgb_input_val[j] * rgb_weight[i * 32 + j]
-
-                    s0 += data_type((ti.max(0.0, temp))) * rgb_weight[16 * 32 + i]
-                    s1 += data_type(
-                        (ti.max(0.0, temp))) * rgb_weight[16 * 32 + 16 + i]
-                    s2 += data_type(
-                        (ti.max(0.0, temp))) * rgb_weight[16 * 32 + 32 + i]
-
-                self.out_1[ray_id] = data_type(ti.exp(sigma_output_val[0]))
-                self.out_3[ray_id, 0] = data_type(1 / (1 + ti.exp(-s0)))
-                self.out_3[ray_id, 1] = data_type(1 / (1 + ti.exp(-s1)))
-                self.out_3[ray_id, 2] = data_type(1 / (1 + ti.exp(-s2)))
 
 
     @ti.kernel
@@ -883,9 +824,8 @@ class NGP_fw:
             self.rearange_index(launch_model_total)
             # self.dir_encode()
             self.hash_encode()
-            # self.sigma_layer()
-            # self.rgb_layer()
-            self.sigma_rgb_layer()
+            self.sigma_layer()
+            self.rgb_layer()
             # self.FullyFusedMLP()
             self.composite_test(N_samples, T_threshold)
             self.re_order(N_alive)
@@ -1165,7 +1105,7 @@ if __name__ == '__main__':
     parser.add_argument('--scene', type=str, default='lego',
                         choices=[
                             # synthetic scenes
-                            'ship', 'mic', 'materials', 'lego', 'hotdog', 'ficus', 'drums', 'chair', 'sm_lego', 
+                            'ship', 'mic', 'materials', 'lego', 'hotdog', 'ficus', 'drums', 'chair', 
                             # real scenes
                             'garden', 'bonsai', 'counter', 'garden', 'kitchen', 'bicycle'
                         ],)
