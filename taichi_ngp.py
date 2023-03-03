@@ -10,6 +10,7 @@ from taichi.math import uvec3, vec3, vec2
 import wget
 import cv2
 import platform
+from camera import OrbitCamera
 
 from typing import Tuple
 
@@ -366,13 +367,15 @@ class NGP_fw:
 
         # use the pre-compute direction and scene pose
         self.directions = ti.Matrix.field(n=1, m=3, dtype=data_type, shape=(self.N_rays,))
-        self.pose = ti.Matrix.field(n=3, m=4, dtype=data_type, shape=())
+        self.pose = ti.Matrix.field(n=4, m=4, dtype=data_type, shape=())
         self.K = ti.Matrix.field(n=3, m=3, dtype=data_type, shape=())
         self.cam_fov_scale = ti.field(dtype=data_type, shape=())
         self.cam_fov_scale[None] = 1.0
 
         self.K.from_numpy(model['K'].astype(np_type))
-        self.pose.from_numpy(model['poses'][20].astype(np_type))
+        self.default_rot = model['poses'][20].astype(np_type)[:3, :3]
+        self.cam = OrbitCamera(self.default_rot, r=2.5)
+        # self.pose.from_numpy(model['poses'][20].astype(np_type))
         # if self.res[0] != 800 or self.res[1] != 800:
         #     directions = self.get_direction(model['camera_angle_x'])[:, None, :].astype(np_type)
         # else:
@@ -458,11 +461,11 @@ class NGP_fw:
                     0.0,
                 ]]
             )
-            c2w_dir = c2w[:, :3].transpose()
+            c2w_dir = c2w[:3, :3].transpose()
             offset_w = offset_m @ c2w_dir
             mat_result = (dir_ori*dist_to_focus) @ c2w_dir - offset_w
             ray_d = tf_vec3(mat_result[0, 0], mat_result[0, 1],mat_result[0, 2])
-            ray_o = c2w[:, 3] + tf_vec3(offset_w[0, 0], offset_w[0, 1],offset_w[0, 2])
+            ray_o = c2w[:3, 3] + tf_vec3(offset_w[0, 0], offset_w[0, 1],offset_w[0, 2])
             
             t1t2 = self._ray_aabb_intersec(ray_o, ray_d)
 
@@ -478,9 +481,9 @@ class NGP_fw:
         ti.block_local(self.pose)
         for i in self.directions: 
             c2w = self.pose[None]
-            mat_result = self.directions[i] @ c2w[:, :3].transpose()
+            mat_result = self.directions[i] @ c2w[:3, :3].transpose()
             ray_d = tf_vec3(mat_result[0, 0], mat_result[0, 1],mat_result[0, 2])
-            ray_o = c2w[:, 3]
+            ray_o = c2w[:3, 3]
             
             t1t2 = self._ray_aabb_intersec(ray_o, ray_d)
 
@@ -883,8 +886,8 @@ class NGP_fw:
         canvas = window.get_canvas()
         gui = window.get_gui()
 
-        last_mouse_x = None
-        last_mouse_y = None
+        last_orbit_x = None
+        last_orbit_y = None
         rotate_speed = 50
         movement_speed = 0.03
         max_samples_for_rendering = 100
@@ -923,49 +926,39 @@ class NGP_fw:
 
         while window.running:
             # TODO: make it more efficient
-            pose = self.pose.to_numpy()
             total_frame+=1
-            if not window.is_pressed(ti.ui.RMB):
-                last_mouse_x = None
-                last_mouse_y = None
-            else:
-                curr_mouse_x, curr_mouse_y = window.get_cursor_pos()
-                if last_mouse_x is None or last_mouse_y is None:
-                    last_mouse_x, last_mouse_y = curr_mouse_x, curr_mouse_y
-                else:
-                    dx = curr_mouse_x - last_mouse_x
-                    dy = curr_mouse_y - last_mouse_y
-                    rotvec_x = pose[:, 1] * np.radians(rotate_speed * dx)
-                    rotvec_y = pose[:, 0] * np.radians(rotate_speed * dy)
-                    pose = R.from_rotvec(rotvec_x).as_matrix() @ R.from_rotvec(rotvec_y).as_matrix() @ pose
-                    last_mouse_x, last_mouse_y = curr_mouse_x, curr_mouse_y
-                    correct_dir = 1. if pose[2, 3] < 0.0 else -1.
-                    self.lookat = np.array([0., 0., correct_dir]) @ pose[:, :3].T
 
-            front = (self.lookat - pose[:, 3])
-            front = front / np.linalg.norm(front)
-            up = self.lookup @ pose[:, :3].T
-            left = np.cross(up, front)
-            position_change = np.zeros(3)
+            if window.is_pressed(ti.ui.RMB):
+                curr_mouse_x, curr_mouse_y = window.get_cursor_pos()
+                if last_orbit_x is None or last_orbit_y is None:
+                    last_orbit_x, last_orbit_y = curr_mouse_x, curr_mouse_y
+                else:
+                    dx = curr_mouse_x - last_orbit_x
+                    dy = curr_mouse_y - last_orbit_y
+                    self.cam.orbit(dx, -dy)
+                    last_orbit_x, last_orbit_y = curr_mouse_x, curr_mouse_y
+            else:
+                last_orbit_x = None
+                last_orbit_y = None
+
             if window.is_pressed('w'):
-                position_change = front * movement_speed
+                self.cam.scale(0.2)
             if window.is_pressed('s'):
-                position_change = -front * movement_speed
+                self.cam.scale(-0.2)
             if window.is_pressed('a'):
-                position_change = left * movement_speed
+                self.cam.pan(100, 0.)
             if window.is_pressed('d'):
-                position_change = -left * movement_speed
+                self.cam.pan(-100, 0.)
             if window.is_pressed('e'):
-                position_change = up * movement_speed
+                self.cam.pan(0., -100)
             if window.is_pressed('q'):
-                position_change = -up * movement_speed
-            pose[:, 3] += position_change
-            self.lookat += position_change
-            if (last_pose - pose).sum():
-                last_pose = pose
-                self.pose.from_numpy(pose.astype(np.float16))
+                self.cam.pan(0., 100)
+
+            if self.cam.params_changed:
                 self.rgb.fill(0.0)
                 total_frame = 1
+                self.cam.params_changed = False
+                self.pose.from_numpy(self.cam.pose.astype(np_type))
 
             with gui.sub_window("Options", 0.05, 0.05, 0.68, 0.3) as w:
                 w.text(f'General')
