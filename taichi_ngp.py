@@ -1053,7 +1053,7 @@ def main(args):
     NGP_fw.taichi_init(args.print_profile)
     real = args.real
     res = [args.h, args.w]
-    if args.scene in ['garden', 'bonsai', 'counter', 'garden', 'kitchen', 'bicycle'] and not args.real:
+    if args.scene in ['garden', 'bonsai', 'counter', 'kitchen', 'bicycle'] and not args.real:
         real = True
         res = [840, 1296]
         
