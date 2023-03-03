@@ -1101,7 +1101,7 @@ if __name__ == '__main__':
                             # synthetic scenes
                             'ship', 'mic', 'materials', 'lego', 'hotdog', 'ficus', 'drums', 'chair',
                             # real scenes
-                            'garden', 'bonsai', 'counter', 'garden', 'kitchen', 'bicycle'
+                            'garden', 'bonsai', 'counter', 'kitchen', 'bicycle'
                         ],)
     parser.add_argument('--model_path', type=str, default=None)
     parser.add_argument('--gui', action='store_true', default=False)
