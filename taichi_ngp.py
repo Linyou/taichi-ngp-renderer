@@ -32,6 +32,7 @@ data_type = ti.f16
 np_type = np.float16
 tf_vec3 = ti.types.vector(3, dtype=data_type)
 tf_vec8 = ti.types.vector(8, dtype=data_type)
+tf_vec16 = ti.types.vector(16, dtype=data_type)
 tf_vec32 = ti.types.vector(32, dtype=data_type)
 tf_vec1 = ti.types.vector(1, dtype=data_type)
 tf_vec2 = ti.types.vector(2, dtype=data_type)
@@ -238,8 +239,6 @@ class NGP_fw:
         self.N_eff_samples = ti.field(ti.int32, shape=(self.N_rays,))
 
         # intermediate buffers for network
-        self.xyzs_embedding = ti.field(data_type, shape=(self.max_samples_shape, 32))
-        self.final_embedding = ti.field(data_type, shape=(self.max_samples_shape, 16))
         self.out_3 = ti.field(data_type, shape=(self.max_samples_shape, 3))
         self.out_1 = ti.field(data_type, shape=(self.max_samples_shape,))
         self.temp_hit = ti.field(ti.i32, shape=(self.max_samples_shape,))
@@ -260,7 +259,7 @@ class NGP_fw:
         print('----GridEncoding----')
         print(f'base_resolution: {self.base_res}') 
         print(f'log_scale:{self.per_level_scales:.5f}') 
-        print(f'feature_per_level: {2} logT: {self.max_params}')
+        print(f'feature_per_level: {self.numof_hash_feet} logT: {self.max_params}')
         print(f'level: {self.level}')
 
         offset = 0
@@ -273,7 +272,7 @@ class NGP_fw:
             self.hash_map_sizes[i] = params_in_level
             self.hash_map_indicator[i] = 1 if resolution ** 3 <= params_in_level else 0
             offset += params_in_level
-        offset *= 2
+        offset *= self.numof_hash_feet
         error_mesg = f"hash shape don't match offset: {offset}, hash shape: {self.hash_embedding.shape[0]}, final res: {resolution}"
         assert offset == self.hash_embedding.shape[0], error_mesg
         
@@ -320,6 +319,7 @@ class NGP_fw:
         np_bitfield = model['model.density_bitfield']
         self.rgb_depth = model['model.rgb_depth']
         self.cascades = model['model.cascade']
+        self.numof_hash_feet = 2
         self.scale = float(model['model.box_scale'])
         self.xyz_min = -tf_vec3(self.scale)
         self.xyz_max = tf_vec3(self.scale)
@@ -333,6 +333,7 @@ class NGP_fw:
         self.per_level_scales = model['model.per_level_scale']
         self.net_width = model['model.n_neurons']
         self.sigma_n_input = model['model.sigma_n_input']
+        # self.sigma_n_input = 16
         self.sigma_n_output = model['model.sigma_n_output']
         self.rgb_n_input = model['model.rgb_n_input']
         self.rgb_n_output =  model['model.rgb_n_output']
@@ -358,6 +359,9 @@ class NGP_fw:
         self.sigma_weights.from_numpy(np_sigma)
         self.rgb_weights.from_numpy(np_rgb)
         self.density_bitfield.from_numpy(np_bitfield)
+
+        self.xyzs_embedding = ti.field(data_type, shape=(self.max_samples_shape, self.sigma_n_input))
+        self.final_embedding = ti.field(data_type, shape=(self.max_samples_shape, self.sigma_n_output))
 
 
         # use the pre-compute direction and scene pose
@@ -569,12 +573,13 @@ class NGP_fw:
     def hash_encode(self):
         # get hash table embedding
         # ti.loop_config(block_dim=16)
+        # for level in ti.static(range(16)):
         for sn in ti.ndrange(self.model_launch[None]):
-            for level in ti.static(range(16)):
+            for level in ti.static(range(self.level)):
                 # normalize to [0, 1], before is [-0.5, 0.5]
                 # xyz = self.xyzs[self.temp_hit[sn]] + 0.5
                 xyz = (self.xyzs[self.temp_hit[sn]] - self.xyz_min) / (self.xyz_delta)
-                offset = self.offsets[level] * 2
+                offset = self.offsets[level] * self.numof_hash_feet
                 indicator = self.hash_map_indicator[level]
                 map_size = self.hash_map_sizes[level]
 
@@ -610,7 +615,7 @@ class NGP_fw:
                             w *= data_type(pos[d])
 
                     index = ti.int32(grid_pos2hash_index(indicator, pos_grid_local, resolution, map_size))
-                    index_temp[idx] = offset+index*2
+                    index_temp[idx] = offset+index*self.numof_hash_feet
                     w_temp[idx] = w
 
                     # local_feature_0 += data_type(w * self.hash_embedding[offset+index*2])
@@ -624,8 +629,9 @@ class NGP_fw:
                     local_feature_0 += data_type(w_temp[idx] * hash_temp_1[idx])
                     local_feature_1 += data_type(w_temp[idx] * hash_temp_2[idx])
 
-                self.xyzs_embedding[sn, level*2] = local_feature_0
-                self.xyzs_embedding[sn, level*2+1] = local_feature_1
+                self.xyzs_embedding[sn, level*self.numof_hash_feet] = local_feature_0
+                self.xyzs_embedding[sn, level*self.numof_hash_feet+1] = local_feature_1
+
 
     @ti.kernel
     def sigma_layer(self):
@@ -641,7 +647,7 @@ class NGP_fw:
             for i in ti.static(range(self.sigma_sm_preload)):
                 k = tid*self.sigma_sm_preload+i
                 weight[k] = self.sigma_weights[k]
-            for i in ti.static(range(self.sigma_n_input)):
+            for i in ti.static(range(8)):
                 input_val[i, tid] = self.xyzs_embedding[sn, i]
             ti.simt.block.sync()
 
@@ -651,7 +657,7 @@ class NGP_fw:
                 for i in range(self.net_width):
                     temp = init_val[0]
                     for j in ti.static(range(self.sigma_n_input)):
-                        temp += input_val[j, tid] * weight[i*self.sigma_n_input+j]
+                        temp += input_val[j, tid] * weight[i*16+j]
 
                     hid1[i, tid] = temp
                 # ti.simt.block.sync()
@@ -1099,7 +1105,7 @@ if __name__ == '__main__':
     parser.add_argument('--scene', type=str, default='lego',
                         choices=[
                             # synthetic scenes
-                            'ship', 'mic', 'materials', 'lego', 'hotdog', 'ficus', 'drums', 'chair',
+                            'ship', 'mic', 'materials', 'lego', 'hotdog', 'ficus', 'drums', 'chair', 
                             # real scenes
                             'garden', 'bonsai', 'counter', 'garden', 'kitchen', 'bicycle'
                         ],)
