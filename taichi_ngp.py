@@ -1,18 +1,18 @@
-from multiprocessing import shared_memory
 import os
-import numpy as np
-import argparse
-from matplotlib import pyplot as plt
-from scipy.spatial.transform import Rotation as R
 import time
+import cv2
+import wget
+import platform
+import argparse
+
+import numpy as np
+from typing import Tuple
+from matplotlib import pyplot as plt
+
 import taichi as ti
 from taichi.math import uvec3, vec3, vec2
-import wget
-import cv2
-import platform
-from camera import OrbitCamera
 
-from typing import Tuple
+from camera import OrbitCamera
 
 def depth2img(depth):
     depth = (depth-depth.min())/(depth.max()-depth.min())
