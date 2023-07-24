@@ -22,7 +22,6 @@ def depth2img(depth):
     return depth_img
 
 arch = ti.cuda if ti._lib.core.with_cuda() else ti.vulkan
-# arch = ti.vulkan
 
 if platform.system() == 'Darwin':
     block_dim = 64
@@ -374,7 +373,7 @@ class NGP_fw:
 
         self.K.from_numpy(model['K'].astype(np_type))
         self.default_rot = model['poses'][20].astype(np_type)[:3, :3]
-        self.cam = OrbitCamera(self.default_rot, r=2.5)
+        self.cam = OrbitCamera(self.default_rot, r=1.5)
         # self.pose.from_numpy(model['poses'][20].astype(np_type))
         # if self.res[0] != 800 or self.res[1] != 800:
         #     directions = self.get_direction(model['camera_angle_x'])[:, None, :].astype(np_type)
